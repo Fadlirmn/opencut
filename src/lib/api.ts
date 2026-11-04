@@ -1,12 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AppSettings,
   CutList,
   DetectParams,
   DiagnosticInfo,
   ExportOptions,
   ExportProgressEvent,
+  Job,
   LinkedTrack,
+  LlmStatus,
+  LogEntry,
   MediaInfo,
   SubtitleFormat,
   TrackProbe,
@@ -148,4 +152,77 @@ export function onExportProgress(
   return listen<ExportProgressEvent>("export-progress", (event) => {
     handler(event.payload);
   });
+}
+
+// ===================== Batch queue (primary UI) =====================
+
+export async function queueAdd(paths: string[]): Promise<Job[]> {
+  return invoke<Job[]>("queue_add", { paths });
+}
+
+export async function queueSnapshot(): Promise<Job[]> {
+  return invoke<Job[]>("queue_snapshot");
+}
+
+export async function queueRemove(id: number): Promise<void> {
+  await invoke("queue_remove", { id });
+}
+
+export async function queueRetry(id: number): Promise<void> {
+  await invoke("queue_retry", { id });
+}
+
+export async function queueClearDone(): Promise<void> {
+  await invoke("queue_clear_done");
+}
+
+export async function queueStart(): Promise<void> {
+  await invoke("queue_start");
+}
+
+/// The whole queue snapshot, re-sent on every state change (a job's
+/// progress tick, a finish, an add/remove) — simpler for a dynamic list
+/// than diffing individual job events on the frontend.
+export function onQueueUpdate(handler: (jobs: Job[]) => void): Promise<UnlistenFn> {
+  return listen<Job[]>("queue-updated", (event) => {
+    handler(event.payload);
+  });
+}
+
+// ===================== Settings =====================
+
+export async function getSettings(): Promise<AppSettings> {
+  return invoke<AppSettings>("get_settings");
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  await invoke("save_settings", { settings });
+}
+
+// ===================== Log =====================
+
+export async function logList(): Promise<LogEntry[]> {
+  return invoke<LogEntry[]>("log_list");
+}
+
+// ===================== LLM connection (OAuth) =====================
+
+export async function llmStatus(): Promise<LlmStatus> {
+  return invoke<LlmStatus>("llm_status");
+}
+
+export async function llmConnect(): Promise<void> {
+  await invoke("llm_connect");
+}
+
+export async function llmCancelConnect(): Promise<void> {
+  await invoke("llm_cancel_connect");
+}
+
+export async function llmDisconnect(): Promise<void> {
+  await invoke("llm_disconnect");
+}
+
+export async function llmTest(): Promise<void> {
+  await invoke("llm_test");
 }

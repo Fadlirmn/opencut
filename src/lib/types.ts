@@ -88,3 +88,55 @@ export type DiagnosticInfo = {
   ffprobe_path: string | null;
   ffprobe_exists: boolean;
 };
+
+// ===== Batch queue (primary UI) =====
+
+export type JobState = "queued" | "running" | "done" | "failed";
+
+export type Job = {
+  id: number;
+  name: string;
+  path: string;
+  state: JobState;
+  pct: number;
+  message: string;
+  output_path: string | null;
+  error: string | null;
+};
+
+export type LogEntry = {
+  name: string;
+  /// Milliseconds since the Unix epoch — format with `new Date(ms)` here,
+  /// not in Rust, so locale/timezone stays a frontend concern.
+  finished_at_ms: number;
+  success: boolean;
+  output_path: string | null;
+  error: string | null;
+  subtitles: boolean;
+};
+
+export type LlmSettings = {
+  provider_label: string;
+  client_id: string;
+  auth_url: string;
+  token_url: string;
+  scope: string;
+  api_base: string;
+  model: string;
+  auto_rewrite: boolean;
+};
+
+export type AppSettings = {
+  parallel_enabled: boolean;
+  parallel_count: number;
+  burn_subtitles: boolean;
+  quality: ExportQuality;
+  resolution: ExportResolution;
+  output_dir: string | null;
+  llm: LlmSettings;
+};
+
+export type LlmStatus = {
+  connected: boolean;
+  provider_label: string;
+};

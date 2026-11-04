@@ -18,7 +18,12 @@ use crate::binaries::{ffmpeg_path, ffprobe_path, model_path};
 use crate::cutlist::CutList;
 use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams, Track};
 use crate::export_mp4;
+use crate::llm;
+use crate::logstore;
+use crate::oauth;
 use crate::probe::{probe, MediaInfo};
+use crate::queue::{Job, JobQueue};
+use crate::settings::{self, AppSettings};
 use crate::subtitle::{render_ass, render_srt, SubtitleStyle, VideoSize};
 use crate::sync::lock;
 use crate::timecode::parse_smpte;
@@ -35,15 +40,39 @@ fn fmt_err(e: impl std::fmt::Display) -> String {
     format!("{e:#}")
 }
 
-#[derive(Default)]
 pub struct AppState {
     /// Single-job cancellation flag. Set by `cancel_export`, polled by the
-    /// export worker. We only support one concurrent export.
+    /// export worker. The single-video editor (hidden from the primary UI,
+    /// kept for later) only ever runs one job of each kind at a time.
     pub export_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub detect_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub subtitle_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub llm_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub analysis_cache: Arc<AnalysisCache>,
+    /// The batch pipeline's job list. Unlike the single-slot cancel flags
+    /// above, this supports any number of jobs — `queue::start` is what
+    /// decides how many run at once.
+    pub queue: Arc<JobQueue>,
+    pub settings: Mutex<AppSettings>,
+    pub app_data_dir: PathBuf,
+}
+
+impl AppState {
+    pub fn new(app_data_dir: PathBuf) -> Self {
+        let settings = settings::load(&app_data_dir);
+        Self {
+            export_cancel: Mutex::new(None),
+            detect_cancel: Mutex::new(None),
+            waveform_cancel: Mutex::new(None),
+            subtitle_cancel: Mutex::new(None),
+            llm_cancel: Mutex::new(None),
+            analysis_cache: Arc::new(AnalysisCache::default()),
+            queue: Arc::new(JobQueue::default()),
+            settings: Mutex::new(settings),
+            app_data_dir,
+        }
+    }
 }
 
 /// Everything derived from one source file's audio that survives across
@@ -440,7 +469,7 @@ pub fn save_subtitles(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(fmt_err)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportQuality {
     High,
@@ -448,7 +477,7 @@ pub enum ExportQuality {
     Small,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportResolution {
     Source,
@@ -690,5 +719,170 @@ pub fn export_fcpxml(args: ExportFcpxmlArgs) -> Result<(), String> {
     )
     .map_err(fmt_err)?;
     std::fs::write(&args.output, xml).map_err(fmt_err)?;
+    Ok(())
+}
+
+// ===================== Batch queue (primary UI) =====================
+
+#[tauri::command]
+pub fn queue_add(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> Vec<Job> {
+    let added: Vec<Job> = paths.into_iter().map(|p| state.queue.add(p)).collect();
+    let _ = app.emit("queue-updated", state.queue.snapshot());
+    added
+}
+
+#[tauri::command]
+pub fn queue_snapshot(state: State<'_, AppState>) -> Vec<Job> {
+    state.queue.snapshot()
+}
+
+/// Removing a queued/finished job deletes it outright; removing a running
+/// one only requests cancellation (see `JobQueue::remove`), so the row has
+/// to stay visible until the worker notices and marks it failed — hence
+/// re-emitting the snapshot here rather than letting the frontend assume
+/// the row is already gone.
+#[tauri::command]
+pub fn queue_remove(app: AppHandle, state: State<'_, AppState>, id: u64) {
+    state.queue.remove(id);
+    let _ = app.emit("queue-updated", state.queue.snapshot());
+}
+
+#[tauri::command]
+pub fn queue_retry(app: AppHandle, state: State<'_, AppState>, id: u64) {
+    state.queue.retry(id);
+    let _ = app.emit("queue-updated", state.queue.snapshot());
+}
+
+#[tauri::command]
+pub fn queue_clear_done(app: AppHandle, state: State<'_, AppState>) {
+    state.queue.clear_done();
+    let _ = app.emit("queue-updated", state.queue.snapshot());
+}
+
+/// Kick off the worker pool. Safe to call again while a previous run is
+/// still finishing up — an idle worker that finds nothing queued exits
+/// immediately, so there's never more than `effective_concurrency()`
+/// workers actually processing at once.
+#[tauri::command]
+pub fn queue_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let ffprobe = ffprobe_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let model = model_path(resource_dir(&app).as_deref()).ok();
+    let settings = lock(&state.settings).clone();
+    let access_token = if settings.llm.auto_rewrite {
+        oauth::load_token().ok().flatten().map(|t| t.access_token)
+    } else {
+        None
+    };
+    crate::queue::start(
+        app,
+        state.queue.clone(),
+        state.app_data_dir.clone(),
+        crate::queue::PipelineContext {
+            ffmpeg,
+            ffprobe,
+            model,
+            settings,
+            access_token,
+        },
+    );
+    Ok(())
+}
+
+// ===================== Settings =====================
+
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> AppSettings {
+    lock(&state.settings).clone()
+}
+
+#[tauri::command]
+pub fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Result<(), String> {
+    settings::save(&state.app_data_dir, &settings).map_err(fmt_err)?;
+    *lock(&state.settings) = settings;
+    Ok(())
+}
+
+// ===================== Log =====================
+
+#[tauri::command]
+pub fn log_list(state: State<'_, AppState>) -> Result<Vec<logstore::LogEntry>, String> {
+    logstore::list(&state.app_data_dir).map_err(fmt_err)
+}
+
+// ===================== LLM connection (OAuth) =====================
+
+#[derive(Debug, Serialize)]
+pub struct LlmStatus {
+    pub connected: bool,
+    pub provider_label: String,
+}
+
+#[tauri::command]
+pub fn llm_status(state: State<'_, AppState>) -> LlmStatus {
+    let connected = oauth::load_token().ok().flatten().is_some();
+    let provider_label = lock(&state.settings).llm.provider_label.clone();
+    LlmStatus {
+        connected,
+        provider_label,
+    }
+}
+
+/// Run the full PKCE flow against whatever provider the user configured in
+/// Settings: open their system browser at the authorize URL, wait for the
+/// loopback redirect, exchange the code, and store the token in the OS
+/// keychain. Blocks the calling async task (not the UI) until the user
+/// finishes in the browser, fails, or calls `llm_cancel_connect`.
+#[tauri::command]
+pub async fn llm_connect(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let llm_settings = lock(&state.settings).llm.clone();
+    let cancel = install_cancel_slot(&state.llm_cancel);
+    let cancel_for_worker = cancel.clone();
+
+    let (verifier, challenge) = oauth::generate_pkce();
+    let oauth_state = oauth::random_state();
+    let url = oauth::authorize_url(&llm_settings, &oauth_state, &challenge).map_err(fmt_err)?;
+
+    // tauri-plugin-shell's open() is deprecated in favor of a separate
+    // tauri-plugin-opener crate; the frontend already depends on this same
+    // plugin for its own external-link opens (Dropzone.svelte), so adding a
+    // second plugin just for this one call isn't worth the extra surface.
+    #[allow(deprecated)]
+    app.shell().open(&url, None).map_err(fmt_err)?;
+
+    let joined = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let code = oauth::await_redirect(&oauth_state, cancel_for_worker).map_err(fmt_err)?;
+        let token = oauth::exchange_code(&llm_settings, &code, &verifier).map_err(fmt_err)?;
+        oauth::store_token(&token).map_err(fmt_err)
+    })
+    .await;
+    clear_cancel_slot(&state.llm_cancel, &cancel);
+    joined.map_err(fmt_err)?
+}
+
+#[tauri::command]
+pub fn llm_cancel_connect(state: State<'_, AppState>) -> Result<(), String> {
+    cancel_slot(&state.llm_cancel);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn llm_disconnect() -> Result<(), String> {
+    oauth::delete_token().map_err(fmt_err)
+}
+
+/// One-off manual check: send a short sample through the configured LLM so
+/// Settings can confirm the connection actually works, without waiting for
+/// a full batch job.
+#[tauri::command]
+pub fn llm_test(state: State<'_, AppState>) -> Result<(), String> {
+    let llm_settings = lock(&state.settings).llm.clone();
+    let token = oauth::load_token()
+        .map_err(fmt_err)?
+        .ok_or_else(|| "belum terhubung ke LLM".to_string())?;
+    let sample = [crate::timeline::TimedText::new(0.0, 1.0, "tes transkrip")];
+    llm::rewrite_transcript(&llm_settings, &token.access_token, &sample).map_err(fmt_err)?;
     Ok(())
 }
