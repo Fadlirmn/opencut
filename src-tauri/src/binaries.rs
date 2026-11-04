@@ -58,7 +58,7 @@ static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static MODEL_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-const WHISPER_MODEL_FILENAME: &str = "ggml-small.bin";
+const WHISPER_MODEL_FILENAME: &str = "ggml-small-q8_0.bin";
 
 fn ext() -> &'static str {
     if cfg!(target_os = "windows") {

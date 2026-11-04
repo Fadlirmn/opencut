@@ -36,7 +36,7 @@
       "binaries/ffprobe"
     ],
     "resources": [
-      "models/ggml-small.bin"
+      "models/ggml-small-q8_0.bin"
     ],
     "icon": [
       "icons/32x32.png",

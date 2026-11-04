@@ -116,7 +116,7 @@ for the full list.
 
 ```sh
 pnpm install
-pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~465MB whisper model
+pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~265MB whisper model
 
 pnpm test                                     # vitest, the cut algebra
 cd src-tauri && AUTOCUT_STUB_SIDECARS=1 AUTOCUT_STUB_MODEL=1 cargo test --lib
