@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="site/autocut.webp" alt="autocut with a clip loaded, silent regions marked red on the timeline" width="700">
+  <img src="site/autocut.webp" alt="autocut's batch queue — drop several videos, watch them process and finish in the sidebar" width="700">
 </p>
 
 <p align="center">

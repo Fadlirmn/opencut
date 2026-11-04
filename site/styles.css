@@ -204,9 +204,9 @@ a:hover { color: var(--accent); }
      vertical space allows at this aspect ratio. Then height = width /
      aspect-ratio. Net effect: image fills the bracketed area exactly,
      no letterboxing, scales gracefully with viewport. */
-  width: min(100%, calc(56vh * 2784 / 1824));
+  width: min(100%, calc(56vh * 1440 / 900));
   height: auto;
-  aspect-ratio: 2784 / 1824;
+  aspect-ratio: 1440 / 900;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: var(--radius);

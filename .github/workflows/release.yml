@@ -33,6 +33,15 @@ jobs:
             bundles: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
+          # rpmbuild isn't preinstalled on ubuntu-latest, so this skips the
+          # rpm target rather than fail on it; dpkg-deb is already on the
+          # image, so deb comes along for free alongside the AppImage.
+          - os: ubuntu-latest
+            artifact: autocut-linux-x86_64
+            bundleTargets: appimage,deb
+            bundles: |
+              src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/deb/*.deb
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +58,16 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      # Same package list ci.yml already proved sufficient for a Tauri 2
+      # Linux build (webkit2gtk-4.1, not the older 4.0 package names).
+      - name: System dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -79,11 +98,18 @@ jobs:
           fi
           echo "releasing $pkg"
 
-      # No AUTOCUT_STUB_SIDECARS here, deliberately: build.rs downloads the
-      # real ~200MB ffmpeg/ffprobe pair, and a bundle built with stubs would
-      # install cleanly and then fail on the first video.
+      # No AUTOCUT_STUB_SIDECARS/AUTOCUT_STUB_MODEL here, deliberately:
+      # build.rs downloads the real ffmpeg/ffprobe pair and whisper model,
+      # and a bundle built with stubs would install cleanly and then fail on
+      # the first video. Linux passes --bundles explicitly to skip rpm
+      # (no rpmbuild on the runner); macOS/Windows build their defaults.
       - name: Tauri build
-        run: node_modules/.bin/tauri build
+        run: |
+          if [ -n "${{ matrix.bundleTargets }}" ]; then
+            node_modules/.bin/tauri build --bundles ${{ matrix.bundleTargets }}
+          else
+            node_modules/.bin/tauri build
+          fi
         shell: bash
 
       - name: Upload installers
@@ -111,17 +137,19 @@ jobs:
           merge-multiple: true
 
       # merge-multiple merges the artifact *names* into one directory but keeps
-      # each artifact's own internal layout. The Windows leg declares two path
-      # patterns, so its installers arrive as artifacts/msi/*.msi and
-      # artifacts/nsis/*.exe, while the single-pattern macOS dmg lands flat.
-      # A plain artifacts/* therefore hands `gh release upload` two directories
-      # and it fails with "is a directory". Flatten to files first.
+      # each artifact's own internal layout. The Windows and Linux legs each
+      # declare two path patterns, so their installers arrive nested (e.g.
+      # artifacts/msi/*.msi and artifacts/nsis/*.exe), while the single-
+      # pattern macOS dmg lands flat. A plain artifacts/* therefore hands
+      # `gh release upload` a directory and it fails with "is a directory".
+      # Flatten to files first.
       - name: Flatten
         run: |
           set -euo pipefail
           mkdir -p installers
           find artifacts -type f \
-            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \
+               -o -name '*.AppImage' -o -name '*.deb' \) \
             -exec mv -t installers {} +
           ls -la installers
 
@@ -147,15 +175,15 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" installers/* --clobber
 
       # The build matrix tolerates one platform failing so the other's artifacts
-      # survive, which means a draft can end up holding only half a release. It
-      # looks complete in the UI, and a macOS-only v0.5.0 is exactly the sort of
-      # thing that gets published by accident. Leave the draft in place — the
-      # assets are still worth having — but keep the run red.
+      # survive, which means a draft can end up holding only part of a release.
+      # It looks complete in the UI, and a macOS-only release is exactly the
+      # sort of thing that gets published by accident. Leave the draft in
+      # place — the assets are still worth having — but keep the run red.
       - name: All platforms present
         run: |
           set -euo pipefail
           missing=""
-          for pattern in "*.dmg" "*.msi" "*-setup.exe"; do
+          for pattern in "*.dmg" "*.msi" "*-setup.exe" "*.AppImage" "*.deb"; do
             if ! compgen -G "installers/$pattern" > /dev/null; then
               missing="$missing $pattern"
             fi
@@ -164,4 +192,4 @@ jobs:
             echo "::error::draft $GITHUB_REF_NAME is incomplete, missing:$missing"
             exit 1
           fi
-          echo "all three installers present"
+          echo "all five installers present"

@@ -51,10 +51,12 @@ jobs:
 
   rust:
     runs-on: ubuntu-latest
-    # The sidecars are ~200MB of ffmpeg that none of the unit tests invoke, so
-    # stub them instead of downloading. See src-tauri/build.rs.
+    # The sidecars are ~200MB of ffmpeg and the model is ~465MB of whisper —
+    # neither is invoked by the unit tests, so stub both instead of
+    # downloading. See src-tauri/build.rs.
     env:
       AUTOCUT_STUB_SIDECARS: "1"
+      AUTOCUT_STUB_MODEL: "1"
     steps:
       - uses: actions/checkout@v4
 
