@@ -8,8 +8,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cobanov/autocut/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/cobanov/autocut?color=0874f7&labelColor=1a1a1a"></a>
-  <a href="https://github.com/cobanov/autocut/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/cobanov/autocut/ci.yml?branch=main&color=0874f7&labelColor=1a1a1a"></a>
+  <a href="https://github.com/Fadlirmn/opencut/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/Fadlirmn/opencut?color=0874f7&labelColor=1a1a1a"></a>
+  <a href="https://github.com/Fadlirmn/opencut/actions/workflows/ci.yml"><img alt="ci" src="https://img.shields.io/github/actions/workflow/status/Fadlirmn/opencut/ci.yml?branch=main&color=0874f7&labelColor=1a1a1a"></a>
   <img alt="tests" src="https://img.shields.io/badge/tests-108-0874f7?labelColor=1a1a1a">
   <img alt="platforms" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows-shipping-0874f7?labelColor=1a1a1a">
 </p>
@@ -133,6 +133,6 @@ checks that `src-tauri/Cargo.toml` agrees.
 
 ## Built by
 
-[mert cobanov](https://cobanov.dev) · 2026
+Originally by [mert cobanov](https://cobanov.dev) · forked and maintained by [Fadlirmn](https://github.com/Fadlirmn) · 2026
 
-[latest]: https://github.com/cobanov/autocut/releases/latest
+[latest]: https://github.com/Fadlirmn/opencut/releases/latest
