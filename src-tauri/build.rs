@@ -26,6 +26,11 @@
 //! of downloading it, so subtitle code can be compiled and unit-tested
 //! without the model present. A build stubbed this way cannot transcribe.
 //!
+//! Freshly-downloaded ffmpeg/ffprobe binaries are then UPX-packed on Linux
+//! and Windows (skipped on macOS — UPX's Mach-O support is unreliable and
+//! risks breaking codesigning/Gatekeeper), cutting their combined size by
+//! roughly half. Best-effort: missing `upx` just ships them uncompressed.
+//!
 //! Uses system `curl`, `tar`, `unzip` so the build itself has zero Rust HTTP
 //! dependencies.
 
@@ -224,7 +229,47 @@ fn ensure_ffmpeg() -> Result<(), String> {
         }
     }
 
+    // UPX reliably packs ELF/PE; its Mach-O support is unreliable and risks
+    // breaking macOS codesigning/Gatekeeper, so macOS ships its sidecars
+    // uncompressed.
+    if !triple.contains("apple-darwin") {
+        pack_with_upx(&ffmpeg);
+        pack_with_upx(&ffprobe);
+    }
+
     Ok(())
+}
+
+/// Best-effort compression of a freshly-downloaded sidecar binary via UPX,
+/// typically cutting ffmpeg/ffprobe's combined size by half or more. Skipped,
+/// not failed, when `upx` isn't on `PATH`: a dev machine without it just
+/// ships a slightly larger local build. The CI legs that actually produce
+/// release artifacts install upx explicitly (see release.yml/
+/// build-windows.yml) so real installers get the smaller binaries.
+fn pack_with_upx(path: &Path) {
+    if Command::new("upx").arg("--version").output().is_err() {
+        println!(
+            "cargo:warning=autocut: upx not found on PATH, shipping {} uncompressed",
+            path.display()
+        );
+        return;
+    }
+    eprintln!("autocut/build: upx-packing {}", path.display());
+    match Command::new("upx")
+        .args(["--best", "--lzma", "-q"])
+        .arg(path)
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => println!(
+            "cargo:warning=autocut: upx exited with {status} packing {}, shipping it uncompressed",
+            path.display()
+        ),
+        Err(e) => println!(
+            "cargo:warning=autocut: could not run upx ({e}), shipping {} uncompressed",
+            path.display()
+        ),
+    }
 }
 
 fn host_target_triple() -> Result<String, String> {
