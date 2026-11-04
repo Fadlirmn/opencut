@@ -94,22 +94,39 @@ audio below, every track cut at the same frames. MP4 export still writes one fil
 from the reference clip: a flat video has one picture and one mix, and choosing
 which angle is on top is an edit, not a cut.
 
+## Stack
+
+| Layer | What |
+| --- | --- |
+| UI | Svelte 5, TypeScript, Vite |
+| Shell | Tauri 2 (Rust) |
+| Silence detection | Silero VAD V5, via the `voice_activity_detector` crate |
+| Subtitles | Whisper `small` (multilingual, forced to Indonesian), via `whisper-rs` |
+| Media I/O | ffmpeg / ffprobe, bundled sidecars |
+
+Everything runs on-device: the VAD model is compiled into the binary, and
+ffmpeg, ffprobe, and the Whisper model are fetched once at build time and
+shipped with the app, so no network call happens at runtime.
+
 ## Development
 
-Svelte 5 and TypeScript in front, Rust and Tauri 2 behind, with ffmpeg and
-ffprobe as bundled sidecars.
+Svelte 5 and TypeScript in front, Rust and Tauri 2 behind, with ffmpeg,
+ffprobe, and a Whisper model as bundled/fetched sidecars. See [Stack](#stack)
+for the full list.
 
 ```sh
 pnpm install
-pnpm tauri:dev                                # the first build fetches ~200MB of ffmpeg
+pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~465MB whisper model
 
 pnpm test                                     # vitest, the cut algebra
-cd src-tauri && AUTOCUT_STUB_SIDECARS=1 cargo test --lib
+cd src-tauri && AUTOCUT_STUB_SIDECARS=1 AUTOCUT_STUB_MODEL=1 cargo test --lib
 ```
 
 `AUTOCUT_STUB_SIDECARS=1` drops empty placeholders where the ffmpeg binaries go,
-so a fresh checkout runs the unit tests without fetching them first. Never set it
-for a real build: the bundle cannot process video, and it says so at compile time.
+and `AUTOCUT_STUB_MODEL=1` does the same for the Whisper model, so a fresh
+checkout runs the unit tests without fetching either first. Never set them for
+a real build: the bundle cannot process video or transcribe, and it says so at
+compile time.
 
 The version lives in `package.json`. `tauri.conf.json` reads it from there, and CI
 checks that `src-tauri/Cargo.toml` agrees.

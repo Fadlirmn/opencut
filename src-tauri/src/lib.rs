@@ -5,8 +5,11 @@ pub mod cutlist;
 pub mod export_fcpxml;
 pub mod export_mp4;
 pub mod probe;
+pub mod subtitle;
 pub mod sync;
 pub mod timecode;
+pub mod timeline;
+pub mod transcribe;
 pub mod vad;
 pub mod waveform;
 
@@ -38,6 +41,9 @@ pub fn run() {
             commands::export_fcpxml,
             commands::diagnostic_info,
             commands::reveal_in_finder,
+            commands::generate_subtitles,
+            commands::cancel_subtitles,
+            commands::save_subtitles,
         ])
         .run(tauri::generate_context!())
         .expect("error while running autocut");

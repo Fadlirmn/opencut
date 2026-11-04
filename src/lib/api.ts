@@ -8,6 +8,7 @@ import type {
   ExportProgressEvent,
   LinkedTrack,
   MediaInfo,
+  SubtitleFormat,
   TrackProbe,
 } from "./types";
 
@@ -63,6 +64,7 @@ export async function exportMp4(
   cutlist: CutList,
   options: ExportOptions,
   hasAudio: boolean,
+  subtitleAss: string | null = null,
 ): Promise<void> {
   await invoke("export_mp4", {
     args: {
@@ -72,12 +74,32 @@ export async function exportMp4(
       quality: options.quality,
       resolution: options.resolution,
       has_audio: hasAudio,
+      subtitle_ass: subtitleAss,
     },
   });
 }
 
 export async function cancelExport(): Promise<void> {
   await invoke("cancel_export");
+}
+
+/// Transcribe `path`'s audio (reusing the already-decoded/cached PCM) and
+/// render it as subtitles already re-based onto the cut timeline.
+export async function generateSubtitles(
+  path: string,
+  cutlist: CutList,
+  video: { width: number; height: number },
+  format: SubtitleFormat,
+): Promise<string> {
+  return invoke<string>("generate_subtitles", { path, cutlist, video, format });
+}
+
+export async function cancelSubtitles(): Promise<void> {
+  await invoke("cancel_subtitles");
+}
+
+export async function saveSubtitles(path: string, contents: string): Promise<void> {
+  await invoke("save_subtitles", { path, contents });
 }
 
 export async function cancelWaveform(): Promise<void> {

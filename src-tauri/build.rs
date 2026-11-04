@@ -1,10 +1,12 @@
 //! Build script: ensure `binaries/ffmpeg-<triple>[.exe]` and
-//! `binaries/ffprobe-<triple>[.exe]` exist for the current target.
+//! `binaries/ffprobe-<triple>[.exe]` exist for the current target, plus the
+//! Whisper model at `models/ggml-small.bin`.
 //!
 //! Sources:
 //!   - macOS (any arch):       evermeet.cx (universal binaries)
 //!   - Linux x86_64 / aarch64: BtbN/FFmpeg-Builds GitHub release
 //!   - Windows x86_64:         BtbN/FFmpeg-Builds GitHub release
+//!   - Whisper model:          huggingface.co/ggerganov/whisper.cpp
 //!
 //! Set `AUTOCUT_SKIP_FFMPEG_DOWNLOAD=1` to skip the download step (offline,
 //! IDE-driven `cargo check`). Missing binaries then fail the bundle phase,
@@ -18,6 +20,11 @@
 //! It is deliberately a separate variable from the one above: anything built
 //! with it produces a non-functional bundle, so it must never be something a
 //! release path could set by accident.
+//!
+//! Set `AUTOCUT_STUB_MODEL=1` for the same reason but for the ~465MB Whisper
+//! model: drops an empty placeholder at `models/ggml-small.bin` instead of
+//! downloading it, so subtitle code can be compiled and unit-tested without
+//! the model present. A build stubbed this way cannot transcribe.
 //!
 //! Uses system `curl`, `tar`, `unzip` so the build itself has zero Rust HTTP
 //! dependencies.
@@ -52,11 +59,22 @@ struct BtbnAsset {
     sha256: &'static str,
 }
 
+// Pinned Whisper model. "small" (multilingual) over "small.en" because the
+// subtitle feature targets Indonesian; the sha256 is git-lfs's own content
+// hash for this file on the ggerganov/whisper.cpp HF repo, so it changes only
+// if that upload is ever replaced.
+const WHISPER_MODEL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+const WHISPER_MODEL_SHA256: &str =
+    "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
+const WHISPER_MODEL_FILENAME: &str = "ggml-small.bin";
+
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=AUTOCUT_SKIP_FFMPEG_DOWNLOAD");
     println!("cargo:rerun-if-env-changed=AUTOCUT_STUB_SIDECARS");
+    println!("cargo:rerun-if-env-changed=AUTOCUT_STUB_MODEL");
 
     if env::var_os("AUTOCUT_STUB_SIDECARS").is_some() {
         println!(
@@ -74,7 +92,60 @@ fn main() {
         println!("cargo:warning=autocut: ffmpeg fetch skipped ({e})");
     }
 
+    if env::var_os("AUTOCUT_STUB_MODEL").is_some() {
+        println!(
+            "cargo:warning=autocut: AUTOCUT_STUB_MODEL is set. \
+             the whisper model is an empty placeholder; this build cannot transcribe."
+        );
+        if let Err(e) = stub_model() {
+            println!("cargo:warning=autocut: could not place model stub ({e})");
+        }
+    } else if env::var_os("AUTOCUT_SKIP_FFMPEG_DOWNLOAD").is_some() {
+        // Same "offline cargo check" escape hatch covers the model fetch too.
+        eprintln!("autocut/build: AUTOCUT_SKIP_FFMPEG_DOWNLOAD set, skipping model fetch");
+    } else if let Err(e) = ensure_model() {
+        println!("cargo:warning=autocut: whisper model fetch skipped ({e})");
+    }
+
     tauri_build::build();
+}
+
+fn model_path() -> Result<PathBuf, String> {
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    Ok(manifest.join("models").join(WHISPER_MODEL_FILENAME))
+}
+
+/// Place an empty file where the model belongs, so code that only checks for
+/// the file's existence (not its content) can compile and unit-test against
+/// it. Existing real models are left alone.
+fn stub_model() -> Result<(), String> {
+    let path = model_path()?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    if !path.exists() {
+        fs::write(&path, b"").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn ensure_model() -> Result<(), String> {
+    let path = model_path()?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+
+    // A zero-length file here is a stub left by AUTOCUT_STUB_MODEL, not a real
+    // model; a build that wants to transcribe should replace it.
+    let usable = fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false);
+    if usable {
+        return Ok(());
+    }
+
+    eprintln!("autocut/build: fetching whisper model ({WHISPER_MODEL_FILENAME})");
+    curl(WHISPER_MODEL_URL, &path)?;
+    verify_sha256(&path, WHISPER_MODEL_SHA256)?;
+    Ok(())
 }
 
 /// Place empty files where the sidecars belong, so `tauri_build`'s

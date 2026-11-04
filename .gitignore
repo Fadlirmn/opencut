@@ -6,6 +6,9 @@ Cargo.lock.bak
 # Bundled binaries (downloaded by build.rs on first build)
 src-tauri/binaries/
 
+# Whisper model (downloaded by build.rs on first build)
+src-tauri/models/
+
 # Node
 node_modules/
 dist/

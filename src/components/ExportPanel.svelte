@@ -86,6 +86,7 @@
           : "source      : (no video loaded)",
         `quality     : ${editor.exportOptions.quality}`,
         `resolution  : ${editor.exportOptions.resolution}`,
+        `subtitles   : ${editor.burnSubtitles ? "burned in" : "off"}`,
         "",
         "error",
         "-----",
@@ -178,6 +179,17 @@
           >{r.label}</button>
         {/each}
       </div>
+    </div>
+
+    <div class="opt">
+      <label class="checkbox-row">
+        <input type="checkbox" bind:checked={editor.burnSubtitles} />
+        <span>burn in subtitles (bahasa indonesia)</span>
+      </label>
+      <p class="hint muted-2">
+        transcribes the audio with whisper and bakes captions into the mp4.
+        adds transcription time before the encode starts.
+      </p>
     </div>
 
     <div class="opt">
@@ -348,6 +360,17 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--foreground);
+    cursor: pointer;
+  }
+  .checkbox-row input {
+    accent-color: var(--accent);
   }
 
   .tracks {

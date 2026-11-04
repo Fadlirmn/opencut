@@ -6,11 +6,13 @@ import {
 import {
   cancelDetect as apiCancelDetect,
   cancelExport as apiCancelExport,
+  cancelSubtitles as apiCancelSubtitles,
   cancelWaveform as apiCancelWaveform,
   computeWaveform,
   detectSilence,
   exportFcpxml as apiExportFcpxml,
   exportMp4 as apiExportMp4,
+  generateSubtitles as apiGenerateSubtitles,
   onExportProgress,
   openTrack,
   openVideo,
@@ -112,6 +114,10 @@ class EditorStore {
     quality: "medium",
     resolution: "source",
   });
+  /// Whether an mp4 export should transcribe and burn in Indonesian
+  /// subtitles first. Off by default — transcription costs real CPU time
+  /// on top of the encode itself.
+  burnSubtitles = $state(false);
   currentTime = $state(0);
   skipRemoved = $state(true);
   jobStatus = $state<JobStatus>("idle");
@@ -146,6 +152,9 @@ class EditorStore {
     });
     void apiCancelWaveform().catch(() => {
       /* best-effort: waveform is non-fatal and may not be running */
+    });
+    void apiCancelSubtitles().catch(() => {
+      /* best-effort: subtitle generation is non-fatal and may not be running */
     });
   }
 
@@ -344,6 +353,17 @@ class EditorStore {
     this.exportError = null;
     let unlisten: (() => void) | null = null;
     try {
+      let subtitleAss: string | null = null;
+      if (this.burnSubtitles) {
+        this.exportProgress = { pct: 0, message: "transcribing (bahasa indonesia)" };
+        subtitleAss = await apiGenerateSubtitles(
+          source,
+          normalized,
+          { width: this.video.width, height: this.video.height },
+          "ass",
+        );
+        if (!this.isCurrentVideo(sessionId, source)) return;
+      }
       unlisten = await onExportProgress((e) => {
         if (this.isCurrentVideo(sessionId, source)) {
           this.exportProgress = e;
@@ -356,6 +376,7 @@ class EditorStore {
         normalized,
         this.exportOptions,
         this.video.has_audio,
+        subtitleAss,
       );
       if (!this.isCurrentVideo(sessionId, source)) return;
       this.exportProgress = { pct: 100, message: "done" };
@@ -411,7 +432,9 @@ class EditorStore {
   }
 
   async cancelExport() {
-    await apiCancelExport();
+    // One of these is the job actually running (transcription, then encode);
+    // cancelling the idle one is a harmless no-op.
+    await Promise.all([apiCancelExport(), apiCancelSubtitles()]);
   }
 
   closeVideo() {

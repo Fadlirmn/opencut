@@ -56,6 +56,9 @@ const TARGET_TRIPLE: &str = "x86_64-pc-windows-gnu";
 
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static MODEL_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+const WHISPER_MODEL_FILENAME: &str = "ggml-small.bin";
 
 fn ext() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -129,4 +132,51 @@ pub fn ffmpeg_path(resource_dir: Option<&Path>) -> Result<PathBuf> {
 
 pub fn ffprobe_path(resource_dir: Option<&Path>) -> Result<PathBuf> {
     cached_binary_path(&FFPROBE_PATH, Tool::Ffprobe, resource_dir).context("resolving ffprobe")
+}
+
+/// Resolve the bundled Whisper model, mirroring [`binary_path`]'s candidate
+/// order. Unlike ffmpeg/ffprobe this isn't a sidecar `externalBin` (it's not
+/// executable), so it's shipped via `tauri.conf.json`'s `resources` list
+/// instead — but production still places it next to the running executable
+/// on macOS, the same place sidecars land, so that candidate stays first.
+fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(WHISPER_MODEL_FILENAME));
+        }
+    }
+    if let Some(rd) = resource_dir {
+        candidates.push(rd.join(WHISPER_MODEL_FILENAME));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models")
+            .join(WHISPER_MODEL_FILENAME),
+    );
+
+    for c in &candidates {
+        if c.exists() {
+            return Ok(c.clone());
+        }
+    }
+
+    let attempted = candidates
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(anyhow!(
+        "could not locate whisper model. tried: {attempted}"
+    ))
+}
+
+pub fn model_path(resource_dir: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = MODEL_PATH.get() {
+        return Ok(path.clone());
+    }
+    let path = model_path_uncached(resource_dir).context("resolving whisper model")?;
+    let _ = MODEL_PATH.set(path.clone());
+    Ok(path)
 }

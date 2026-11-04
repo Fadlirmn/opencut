@@ -79,11 +79,14 @@ impl Resolution {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ExportOptions {
     pub quality: Quality,
     pub resolution: Resolution,
     pub has_audio: bool,
+    /// Rendered ASS subtitle text to burn into the output via ffmpeg's `ass`
+    /// filter. `None` skips subtitle filtering entirely.
+    pub subtitle_ass: Option<String>,
 }
 
 impl Default for ExportOptions {
@@ -92,6 +95,7 @@ impl Default for ExportOptions {
             quality: Quality::Medium,
             resolution: Resolution::Source,
             has_audio: true,
+            subtitle_ass: None,
         }
     }
 }
@@ -114,6 +118,16 @@ pub fn export(
     // Defer file removal so it persists even if we early-return on error —
     // makes failures debuggable. Cleaned up at the bottom of the happy path.
 
+    let subtitle_path = match &options.subtitle_ass {
+        Some(ass) => {
+            let path = subtitle_temp_path();
+            std::fs::write(&path, ass)
+                .with_context(|| format!("writing subtitle temp file at {}", path.display()))?;
+            Some(path)
+        }
+        None => None,
+    };
+
     let crf = options.quality.crf().to_string();
 
     let mut cmd = Command::new(ffmpeg);
@@ -130,12 +144,21 @@ pub fn export(
     .arg("-i")
     .arg(&list_path)
     .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf]);
-    // Downscale via -vf when requested. `-2` on the width side asks ffmpeg to
-    // pick whatever keeps the aspect ratio and stays divisible by 2 (libx264
-    // requirement). Concat demuxer produces continuous timestamps across
-    // segments on its own, no setpts needed.
+    // Downscale and/or burn in subtitles via -vf. `-2` on the width side asks
+    // ffmpeg to pick whatever keeps the aspect ratio and stays divisible by 2
+    // (libx264 requirement). Concat demuxer produces continuous timestamps
+    // across segments on its own, no setpts needed. Both filters, when
+    // present, must be comma-joined into one -vf chain — ffmpeg takes a
+    // single filter graph, not one flag per filter.
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(path) = &subtitle_path {
+        filters.push(format!("ass={}", escape_filter_path(path)));
+    }
     if let Some(h) = options.resolution.target_height() {
-        cmd.args(["-vf", &format!("scale=-2:{h}")]);
+        filters.push(format!("scale=-2:{h}"));
+    }
+    if !filters.is_empty() {
+        cmd.args(["-vf", &filters.join(",")]);
     }
     if options.has_audio {
         cmd.args(["-c:a", "aac", "-b:a", options.quality.audio_bitrate()]);
@@ -222,10 +245,14 @@ pub fn export(
         }
     };
 
-    // Only clean up the concat list on success; leave it on disk on failure so
-    // the user (or a bug report) can inspect what we asked ffmpeg to do.
+    // Only clean up the concat list (and subtitle temp file) on success; leave
+    // them on disk on failure so the user (or a bug report) can inspect what
+    // we asked ffmpeg to do.
     if outcome.is_ok() {
         let _ = std::fs::remove_file(&list_path);
+        if let Some(path) = &subtitle_path {
+            let _ = std::fs::remove_file(path);
+        }
     } else {
         // Killing ffmpeg mid-encode leaves a truncated, unplayable mp4 at the
         // path the user chose — and if they were overwriting an earlier
@@ -281,6 +308,26 @@ fn concat_list_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("autocut-concat-{}-{}.txt", std::process::id(), id))
+}
+
+/// Same uniqueness scheme as [`concat_list_path`], its own counter so the two
+/// never collide with each other either.
+fn subtitle_temp_path() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("autocut-subs-{}-{}.ass", std::process::id(), id))
+}
+
+/// Escape a path for use inside an ffmpeg filter argument (e.g. `ass=<path>`).
+/// ffmpeg's filter-graph parser treats `:`, `\`, and `'` specially inside a
+/// filter's option string, so each needs its own backslash — on top of the
+/// backslashes Windows paths already contain. Without this, a Windows path
+/// like `C:\Users\...` or any path containing a `:` breaks filter parsing.
+fn escape_filter_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
 }
 
 #[cfg(test)]

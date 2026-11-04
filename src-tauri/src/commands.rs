@@ -14,13 +14,16 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::extract_pcm_with_cancel;
-use crate::binaries::{ffmpeg_path, ffprobe_path};
+use crate::binaries::{ffmpeg_path, ffprobe_path, model_path};
 use crate::cutlist::CutList;
 use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams, Track};
 use crate::export_mp4;
 use crate::probe::{probe, MediaInfo};
+use crate::subtitle::{render_ass, render_srt, SubtitleStyle, VideoSize};
 use crate::sync::lock;
 use crate::timecode::parse_smpte;
+use crate::timeline::map_to_output;
+use crate::transcribe::transcribe;
 use crate::vad::{score_chunks, segments_from_scores, VadParams};
 use crate::waveform::waveform_from_samples;
 
@@ -39,6 +42,7 @@ pub struct AppState {
     pub export_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub detect_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub subtitle_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub analysis_cache: Arc<AnalysisCache>,
 }
 
@@ -365,6 +369,78 @@ pub async fn detect_silence(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct VideoSizeArgs {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl From<VideoSizeArgs> for VideoSize {
+    fn from(v: VideoSizeArgs) -> Self {
+        VideoSize {
+            width: v.width,
+            height: v.height,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtitleFormat {
+    Ass,
+    Srt,
+}
+
+/// Transcribe `path`'s audio, re-base the captions onto the cut timeline, and
+/// render them. Reuses the same cached PCM `detect_silence`/`compute_waveform`
+/// already decoded — no second ffmpeg pass over the source.
+#[tauri::command]
+pub async fn generate_subtitles(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    cutlist: CutList,
+    video: VideoSizeArgs,
+    format: SubtitleFormat,
+) -> Result<String, String> {
+    let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let model = model_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let video: VideoSize = video.into();
+    let source = PathBuf::from(&path);
+    let cancel = install_cancel_slot(&state.subtitle_cancel);
+    let cancel_for_worker = cancel.clone();
+    let cache = state.analysis_cache.clone();
+
+    let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let samples = cache.samples(&ffmpeg, &source, cancel_for_worker.clone())?;
+        let segments = transcribe(&model, &samples, cancel_for_worker.clone()).map_err(fmt_err)?;
+        let output_segments = map_to_output(&cutlist, &segments);
+        let style = SubtitleStyle::default();
+        Ok(match format {
+            SubtitleFormat::Ass => render_ass(&output_segments, video, &style),
+            SubtitleFormat::Srt => render_srt(&output_segments),
+        })
+    })
+    .await;
+    clear_cancel_slot(&state.subtitle_cancel, &cancel);
+    joined.map_err(fmt_err)?
+}
+
+#[tauri::command]
+pub fn cancel_subtitles(state: State<'_, AppState>) -> Result<(), String> {
+    cancel_slot(&state.subtitle_cancel);
+    Ok(())
+}
+
+/// Write rendered subtitle text (ASS or SRT) to disk. The frontend has no
+/// filesystem plugin of its own, so this is the same one-line `std::fs::write`
+/// `export_fcpxml` already does for its XML string, just exposed for the
+/// subtitle sidecar-file case (FCPXML export, or saving alongside an mp4).
+#[tauri::command]
+pub fn save_subtitles(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(fmt_err)
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportQuality {
     High,
@@ -395,6 +471,10 @@ pub struct ExportMp4Args {
     pub resolution: ExportResolution,
     #[serde(default = "default_has_audio")]
     pub has_audio: bool,
+    /// Rendered ASS subtitle text (from `generate_subtitles`) to burn into
+    /// the output. `None`/absent skips subtitle filtering.
+    #[serde(default)]
+    pub subtitle_ass: Option<String>,
 }
 
 fn default_quality() -> ExportQuality {
@@ -453,6 +533,7 @@ pub async fn export_mp4(
         quality: args.quality.into(),
         resolution: args.resolution.into(),
         has_audio: args.has_audio,
+        subtitle_ass: args.subtitle_ass,
     };
     thread::spawn(move || {
         let on_progress = move |p: export_mp4::ExportProgress| {

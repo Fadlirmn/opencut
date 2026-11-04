@@ -77,6 +77,8 @@ export type ExportProgressEvent = {
   message: string;
 };
 
+export type SubtitleFormat = "ass" | "srt";
+
 export type DiagnosticInfo = {
   app_version: string;
   target_os: string;
