@@ -1,6 +1,6 @@
 //! Build script: ensure `binaries/ffmpeg-<triple>[.exe]` and
 //! `binaries/ffprobe-<triple>[.exe]` exist for the current target, plus the
-//! Whisper model at `models/ggml-small-q8_0.bin`.
+//! Whisper model at `models/ggml-large-v3-turbo-q5_0.bin`.
 //!
 //! Sources:
 //!   - macOS (any arch):       evermeet.cx (universal binaries)
@@ -21,8 +21,8 @@
 //! with it produces a non-functional bundle, so it must never be something a
 //! release path could set by accident.
 //!
-//! Set `AUTOCUT_STUB_MODEL=1` for the same reason but for the ~265MB Whisper
-//! model: drops an empty placeholder at `models/ggml-small-q8_0.bin` instead
+//! Set `AUTOCUT_STUB_MODEL=1` for the same reason but for the ~575MB Whisper
+//! model: drops an empty placeholder at `models/ggml-large-v3-turbo-q5_0.bin` instead
 //! of downloading it, so subtitle code can be compiled and unit-tested
 //! without the model present. A build stubbed this way cannot transcribe.
 //!
@@ -64,18 +64,18 @@ struct BtbnAsset {
     sha256: &'static str,
 }
 
-// Pinned Whisper model. "small" (multilingual) over "small.en" because the
-// subtitle feature targets Indonesian; q8_0 (8-bit quantized) over the full
-// fp16 weights because it cuts ~223MB off the installed app with accuracy
-// close enough to the unquantized model not to matter for this use case. The
-// sha256 is git-lfs's own content hash for this file on the
-// ggerganov/whisper.cpp HF repo, so it changes only if that upload is ever
-// replaced.
+// Pinned Whisper model. "large-v3-turbo" (multilingual) for better Indonesian
+// transcription accuracy than "small"; q5_0 (5-bit quantized) over the full
+// fp16 weights because it keeps the installed app under ~600MB (vs ~1.5GB
+// fp16) with accuracy close enough to the unquantized model not to matter for
+// this use case. The sha256 is git-lfs's own content hash for this file on
+// the ggerganov/whisper.cpp HF repo, so it changes only if that upload is
+// ever replaced.
 const WHISPER_MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin";
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 const WHISPER_MODEL_SHA256: &str =
-    "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f";
-const WHISPER_MODEL_FILENAME: &str = "ggml-small-q8_0.bin";
+    "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2";
+const WHISPER_MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
 
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");

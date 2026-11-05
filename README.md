@@ -101,7 +101,7 @@ which angle is on top is an edit, not a cut.
 | UI | Svelte 5, TypeScript, Vite |
 | Shell | Tauri 2 (Rust) |
 | Silence detection | Silero VAD V5, via the `voice_activity_detector` crate |
-| Subtitles | Whisper `small` (multilingual, forced to Indonesian), via `whisper-rs` |
+| Subtitles | Whisper `large-v3-turbo` (multilingual, forced to Indonesian), via `whisper-rs` |
 | Media I/O | ffmpeg / ffprobe, bundled sidecars |
 
 Everything runs on-device: the VAD model is compiled into the binary, and
@@ -116,7 +116,7 @@ for the full list.
 
 ```sh
 pnpm install
-pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~265MB whisper model
+pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~575MB whisper model
 
 pnpm test                                     # vitest, the cut algebra
 cd src-tauri && AUTOCUT_STUB_SIDECARS=1 AUTOCUT_STUB_MODEL=1 cargo test --lib

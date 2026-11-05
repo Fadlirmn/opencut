@@ -58,7 +58,7 @@ static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
 static MODEL_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-const WHISPER_MODEL_FILENAME: &str = "ggml-small-q8_0.bin";
+const WHISPER_MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
 
 fn ext() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -149,7 +149,7 @@ fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
     }
     if let Some(rd) = resource_dir {
         // tauri.conf.json ships the model as a `resources` entry with a
-        // `models/` subpath ("models/ggml-small-q8_0.bin"), and Tauri
+        // `models/` subpath ("models/ggml-large-v3-turbo-q5_0.bin"), and Tauri
         // preserves that relative path under resource_dir — unlike
         // `externalBin` sidecars (ffmpeg/ffprobe), which always land flat.
         // The flat candidate stays as a harmless fallback in case that

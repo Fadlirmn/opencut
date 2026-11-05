@@ -37,8 +37,27 @@ pub fn extract_pcm_with_cancel(
     video: &Path,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<i16>> {
+    run_extract(build_extract_cmd(ffmpeg, video, false), video, cancel)
+}
+
+/// Same extraction as [`extract_pcm_with_cancel`], but with ffmpeg's `afftdn`
+/// denoise filter applied first. For manual A/B comparison only (see
+/// `examples/compare_models.rs`) -- denoise can help on noisy/musical audio
+/// or make things worse, so it's never applied in the app's normal pipeline.
+pub fn extract_pcm_denoised(
+    ffmpeg: &Path,
+    video: &Path,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<Vec<i16>> {
+    run_extract(build_extract_cmd(ffmpeg, video, true), video, cancel)
+}
+
+fn build_extract_cmd(ffmpeg: &Path, video: &Path, denoise: bool) -> Command {
     let mut cmd = Command::new(ffmpeg);
     cmd.arg("-i").arg(video);
+    if denoise {
+        cmd.args(["-af", "afftdn=nr=12:nf=-25"]);
+    }
     cmd.args([
         "-vn",
         "-ac",
@@ -52,7 +71,14 @@ pub fn extract_pcm_with_cancel(
         "-",
     ]);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd
+}
 
+fn run_extract(
+    mut cmd: Command,
+    video: &Path,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<Vec<i16>> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning ffmpeg for {}", video.display()))?;
