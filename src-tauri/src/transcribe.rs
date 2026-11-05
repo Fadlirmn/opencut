@@ -42,6 +42,10 @@ pub fn transcribe(
     let pcm: Vec<f32> = samples.iter().copied().map(to_unit).collect();
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 5 });
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get() as i32)
+        .unwrap_or(4);
+    params.set_n_threads(threads);
     params.set_language(Some(LANGUAGE));
     params.set_translate(false);
     params.set_detect_language(false);

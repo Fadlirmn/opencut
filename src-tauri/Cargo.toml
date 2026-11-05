@@ -33,6 +33,18 @@ keyring = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
 
+# Windows: Vulkan runs on NVIDIA, AMD and Intel GPUs with only the stock driver.
+# The `cuda` feature would be faster on NVIDIA but needs the CUDA toolkit to
+# build and the CUDA runtime DLLs on every user's machine, so the app would
+# fail to start on non-NVIDIA PCs.
+[target.'cfg(target_os = "windows")'.dependencies]
+whisper-rs = { version = "0.16", features = ["vulkan"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
