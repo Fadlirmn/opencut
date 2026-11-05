@@ -47,7 +47,7 @@
 
         <div class="switch-row">
           <div>
-            <div class="s-title">proses paralel</div>
+            <div class="s-title">Proses Paralel</div>
             <div class="s-sub">jalankan beberapa video bersamaan, bukan satu-per-satu</div>
           </div>
           <label class="switch">
@@ -58,7 +58,7 @@
 
         {#if s.parallel_enabled}
           <div class="sub-panel">
-            <div class="s-title" style="margin-bottom:8px;">jumlah video bersamaan</div>
+            <div class="s-title" style="margin-bottom:8px;">Jumlah Video Bersamaan</div>
             <div class="count-row">
               {#each [1, 2, 3, 4] as n (n)}
                 <button
@@ -77,7 +77,7 @@
 
         <div class="switch-row">
           <div>
-            <div class="s-title">bakar subtitle bahasa indonesia</div>
+            <div class="s-title">Bakar Subtitle Bahasa Indonesia</div>
             <div class="s-sub">transkrip whisper dibakar ke video hasil export</div>
           </div>
           <label class="switch">
@@ -89,7 +89,7 @@
         <div class="divider"></div>
 
         <div class="opt">
-          <div class="opt-label">kualitas export</div>
+          <div class="opt-label">Kualitas Export</div>
           <div class="seg">
             {#each qualityOptions as q (q.value)}
               <button class="seg-btn" class:active={s.quality === q.value} onclick={() => (s.quality = q.value)} type="button">
@@ -100,7 +100,7 @@
         </div>
 
         <div class="opt">
-          <div class="opt-label">resolusi export</div>
+          <div class="opt-label">Resolusi Export</div>
           <div class="seg">
             {#each resolutionOptions as r (r.value)}
               <button class="seg-btn" class:active={s.resolution === r.value} onclick={() => (s.resolution = r.value)} type="button">
@@ -111,7 +111,7 @@
         </div>
 
         <div class="field">
-          <label for="outputDir">folder output (kosong = sebelah file asli)</label>
+          <label for="outputDir">Folder Output (Kosong = Sebelah File Asli)</label>
           <input id="outputDir" type="text" bind:value={s.output_dir} placeholder="~/Videos/autocut" />
         </div>
       </div>
@@ -129,11 +129,11 @@
               <span class="dot"></span>
               <span class="c-name">terhubung · {batch.llm.provider_label || "provider tersimpan"}</span>
             </div>
-            <button class="btn btn-ghost btn-sm" onclick={() => batch.disconnectLlm()} type="button">putuskan</button>
+            <button class="btn btn-ghost btn-sm" onclick={() => batch.disconnectLlm()} type="button">Putuskan</button>
           </div>
           <div class="switch-row">
             <div>
-              <div class="s-title">rapikan transkrip otomatis</div>
+              <div class="s-title">Rapikan Transkrip Otomatis</div>
               <div class="s-sub">jalan otomatis setelah transkripsi, sebelum dibakar ke subtitle</div>
             </div>
             <label class="switch">
@@ -141,7 +141,7 @@
               <span></span>
             </label>
           </div>
-          <button class="btn btn-ghost btn-sm" onclick={() => batch.testLlm()} type="button">tes koneksi</button>
+          <button class="btn btn-ghost btn-sm" onclick={() => batch.testLlm()} type="button">Tes Koneksi</button>
           {#if batch.llmTestResult}
             <p class="tip" class:tip-ok={batch.llmTestResult === "berhasil"} class:tip-bad={batch.llmTestResult !== "berhasil"}>
               {batch.llmTestResult === "berhasil" ? "tes berhasil" : batch.llmTestResult}
@@ -149,43 +149,43 @@
           {/if}
         {:else}
           <div class="field">
-            <label for="providerLabel">label provider</label>
+            <label for="providerLabel">Label Provider</label>
             <input id="providerLabel" type="text" bind:value={s.llm.provider_label} placeholder="mis. Provider Saya" />
           </div>
           <div class="field-row">
             <div class="field">
-              <label for="clientId">client id</label>
+              <label for="clientId">Client ID</label>
               <input id="clientId" type="text" bind:value={s.llm.client_id} />
             </div>
             <div class="field">
-              <label for="scope">scope</label>
+              <label for="scope">Scope</label>
               <input id="scope" type="text" bind:value={s.llm.scope} placeholder="openid profile" />
             </div>
           </div>
           <div class="field">
-            <label for="authUrl">authorization url</label>
+            <label for="authUrl">Authorization URL</label>
             <input id="authUrl" type="text" bind:value={s.llm.auth_url} placeholder="https://provider.example/oauth/authorize" />
           </div>
           <div class="field">
-            <label for="tokenUrl">token url</label>
+            <label for="tokenUrl">Token URL</label>
             <input id="tokenUrl" type="text" bind:value={s.llm.token_url} placeholder="https://provider.example/oauth/token" />
           </div>
           <div class="field-row">
             <div class="field">
-              <label for="apiBase">api base (openai-compatible)</label>
+              <label for="apiBase">API Base (OpenAI-Compatible)</label>
               <input id="apiBase" type="text" bind:value={s.llm.api_base} placeholder="https://api.example.com/v1" />
             </div>
             <div class="field">
-              <label for="model">model</label>
+              <label for="model">Model</label>
               <input id="model" type="text" bind:value={s.llm.model} placeholder="gpt-4o-mini" />
             </div>
           </div>
 
           <button class="btn btn-primary" disabled={batch.llmBusy} onclick={() => batch.connectLlm()} type="button">
-            {batch.llmBusy ? "membuka browser…" : "hubungkan akun (oauth)"}
+            {batch.llmBusy ? "Membuka Browser…" : "Hubungkan Akun (OAuth)"}
           </button>
           {#if batch.llmBusy}
-            <button class="btn btn-ghost btn-sm" onclick={() => batch.cancelLlmConnect()} type="button">batalkan</button>
+            <button class="btn btn-ghost btn-sm" onclick={() => batch.cancelLlmConnect()} type="button">Batalkan</button>
           {/if}
           {#if batch.llmError}
             <p class="tip tip-bad">{batch.llmError}</p>
@@ -203,7 +203,7 @@
 
     <div class="save-row">
       <button class="btn btn-primary" disabled={batch.savingSettings} onclick={save} type="button">
-        {batch.savingSettings ? "menyimpan…" : "simpan pengaturan"}
+        {batch.savingSettings ? "Menyimpan…" : "Simpan Pengaturan"}
       </button>
     </div>
   {/if}

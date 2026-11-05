@@ -3,6 +3,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open } from "@tauri-apps/plugin-dialog";
   import { batch } from "../lib/batch.svelte";
+  import { openWithDefaultApp } from "../lib/api";
 
   const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi)$/i;
 
@@ -80,9 +81,9 @@
   </header>
 
   <div class="dropzone card" class:hovering>
-    <div class="dz-title mono">drop video di sini</div>
+    <div class="dz-title mono">Drop Video di Sini</div>
     <div class="dz-sub">atau pilih beberapa file sekaligus dari komputer</div>
-    <button class="btn btn-primary" type="button" onclick={browseFiles}>+ tambah video</button>
+    <button class="btn btn-primary" type="button" onclick={browseFiles}>+ Tambah Video</button>
     <div class="formats mono">mp4 · mov · m4v · mkv · webm · avi</div>
   </div>
 
@@ -138,7 +139,7 @@
         disabled={starting || processingJobs.length === 0}
         onclick={startQueue}
         type="button"
-      >{starting ? "memulai…" : "proses semua"}</button>
+      >{starting ? "Memulai…" : "Proses Semua"}</button>
     </footer>
   </section>
 
@@ -175,10 +176,15 @@
             </div>
             {#if job.state === "done"}
               <span class="pill pill-done mono">selesai</span>
+              {#if job.output_path}
+                <button class="btn btn-ghost btn-sm" onclick={() => openWithDefaultApp(job.output_path!)} type="button">
+                  Preview
+                </button>
+              {/if}
             {:else}
               <span class="pill pill-fail mono">gagal</span>
               <button class="btn btn-ghost btn-sm" onclick={() => batch.retry(job.id)} type="button">
-                coba lagi
+                Coba Lagi
               </button>
             {/if}
             <button class="icon-btn" title="Hapus" onclick={() => batch.remove(job.id)} type="button">×</button>
@@ -193,7 +199,7 @@
         disabled={doneCount === 0}
         onclick={() => batch.clearDone()}
         type="button"
-      >hapus yang selesai</button>
+      >Hapus yang Selesai</button>
     </footer>
   </section>
 </section>

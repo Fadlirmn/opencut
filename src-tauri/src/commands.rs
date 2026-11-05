@@ -675,6 +675,22 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a file with the OS's default handler (e.g. the user's installed
+/// video player), instead of trying to play it inside the webview — WebKit
+/// on Linux depends on system GStreamer plugins that aren't guaranteed to
+/// be installed, so in-app `<video>` playback isn't reliable across setups.
+#[tauri::command]
+pub fn open_with_default_app(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("file does not exist: {path}"));
+    }
+    #[allow(deprecated)]
+    app.shell().open(&path, None).map_err(fmt_err)
+}
+
 #[tauri::command]
 pub fn export_fcpxml(args: ExportFcpxmlArgs) -> Result<(), String> {
     let source = PathBuf::from(&args.source);

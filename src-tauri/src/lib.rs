@@ -57,6 +57,7 @@ pub fn run() {
             commands::export_fcpxml,
             commands::diagnostic_info,
             commands::reveal_in_finder,
+            commands::open_with_default_app,
             commands::generate_subtitles,
             commands::cancel_subtitles,
             commands::save_subtitles,

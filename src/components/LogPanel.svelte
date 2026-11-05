@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { batch } from "../lib/batch.svelte";
-  import { revealInFinder } from "../lib/api";
+  import { revealInFinder, openWithDefaultApp } from "../lib/api";
 
   onMount(() => {
     void batch.refreshLogs();
   });
+
+  function entryKey(e: { finished_at_ms: number; name: string }): string {
+    return e.finished_at_ms + e.name;
+  }
 
   type Filter = "semua" | "berhasil" | "gagal";
   let filter = $state<Filter>("semua");
@@ -67,7 +71,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each filtered as entry (entry.finished_at_ms + entry.name)}
+            {#each filtered as entry (entryKey(entry))}
               <tr>
                 <td class="mono">{entry.name}</td>
                 <td class="muted">{fmtDate(entry.finished_at_ms)}</td>
@@ -87,8 +91,11 @@
                 </td>
                 <td style="text-align:right">
                   {#if entry.success && entry.output_path}
+                    <button class="btn btn-ghost btn-sm" onclick={() => openWithDefaultApp(entry.output_path!)} type="button">
+                      Preview
+                    </button>
                     <button class="btn btn-ghost btn-sm" onclick={() => revealInFinder(entry.output_path!)} type="button">
-                      lihat file
+                      Lihat File
                     </button>
                   {/if}
                 </td>

@@ -126,6 +126,7 @@ html, body, #app {
   overflow: hidden;
 }
 .card-body { padding: 14px; }
+.card-pad { padding: 16px; }
 
 .card-head {
   display: flex;

@@ -114,6 +114,10 @@ export async function revealInFinder(path: string): Promise<void> {
   await invoke("reveal_in_finder", { path });
 }
 
+export async function openWithDefaultApp(path: string): Promise<void> {
+  await invoke("open_with_default_app", { path });
+}
+
 export async function exportFcpxml(
   source: string,
   output: string,

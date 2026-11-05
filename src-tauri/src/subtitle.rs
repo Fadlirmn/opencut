@@ -39,7 +39,12 @@ pub fn render_ass(segments: &[TimedText], video: VideoSize, style: &SubtitleStyl
     let font_size = style
         .font_size
         .unwrap_or_else(|| ((height as f64 * 0.045).round() as u32).clamp(16, 64));
-    let margin_v = ((height as f64 * 0.04).round() as u32).max(12);
+    // Bottom-anchored but pushed up to roughly the lower-middle third of the
+    // frame (~30% of height from the bottom edge) — this is where TikTok/
+    // Shopee-style captions sit, clear of both the subject and any
+    // platform UI chrome overlaid at the very bottom, rather than hugging
+    // the bottom edge or sitting dead-center over the subject's face.
+    let margin_v = ((height as f64 * 0.30).round() as u32).max(40);
     let margin_h = ((width as f64 * 0.04).round() as u32).max(12);
 
     let mut out = String::new();
@@ -56,7 +61,7 @@ pub fn render_ass(segments: &[TimedText], video: VideoSize, style: &SubtitleStyl
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
     );
     out.push_str(&format!(
-        "Style: Default,{},{},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,{margin_h},{margin_h},{margin_v},1\n\n",
+        "Style: Default,{},{},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,2,{margin_h},{margin_h},{margin_v},1\n\n",
         sanitize_font_name(&style.font_name),
         font_size
     ));

@@ -44,13 +44,13 @@
       <h2>Identitas Lokal</h2>
     </div>
     <div class="field">
-      <label for="displayName">nama tampilan</label>
+      <label for="displayName">Nama Tampilan</label>
       <input id="displayName" type="text" bind:value={displayName} />
     </div>
     <div class="row-between">
       <span class="muted-2 tip">perubahan disimpan di perangkat ini</span>
       <button class="btn btn-primary btn-sm" onclick={save} type="button">
-        {saved ? "tersimpan ✓" : "simpan"}
+        {saved ? "Tersimpan ✓" : "Simpan"}
       </button>
     </div>
   </div>
@@ -63,15 +63,15 @@
     <div class="about-grid">
       <div class="about-item">
         <div class="v mono">{diag?.app_version ?? "—"}</div>
-        <div class="k">versi</div>
+        <div class="k">Versi</div>
       </div>
       <div class="about-item">
         <div class="v mono">{diag ? `${diag.target_os}/${diag.target_arch}` : "—"}</div>
-        <div class="k">platform</div>
+        <div class="k">Platform</div>
       </div>
       <div class="about-item">
         <div class="v mono">whisper small</div>
-        <div class="k">model subtitle</div>
+        <div class="k">Model Subtitle</div>
       </div>
     </div>
   </div>

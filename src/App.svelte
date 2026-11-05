@@ -5,6 +5,7 @@
   // Those components and their store (lib/store.svelte.ts) stay in the repo
   // for whoever wants to bring the manual-editing mode back later.
   import { onMount } from "svelte";
+  import TitleBar from "./components/TitleBar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import UploadQueuePanel from "./components/UploadQueuePanel.svelte";
   import LogPanel from "./components/LogPanel.svelte";
@@ -18,26 +19,35 @@
   });
 </script>
 
-<main class="shell">
-  <Sidebar />
-  <section class="main">
-    {#if batch.page === "upload"}
-      <UploadQueuePanel />
-    {:else if batch.page === "log"}
-      <LogPanel />
-    {:else if batch.page === "settings"}
-      <SettingsPanel />
-    {:else}
-      <ProfilePanel />
-    {/if}
-  </section>
-</main>
+<div class="app-root">
+  <TitleBar />
+  <main class="shell">
+    <Sidebar />
+    <section class="main">
+      {#if batch.page === "upload"}
+        <UploadQueuePanel />
+      {:else if batch.page === "log"}
+        <LogPanel />
+      {:else if batch.page === "settings"}
+        <SettingsPanel />
+      {:else}
+        <ProfilePanel />
+      {/if}
+    </section>
+  </main>
+</div>
 
 <style>
+  .app-root {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
   .shell {
     display: grid;
     grid-template-columns: 220px 1fr;
-    height: 100vh;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .main {
