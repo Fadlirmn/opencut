@@ -57,6 +57,17 @@ pub struct JobQueue {
     jobs: Mutex<Vec<Job>>,
     next_id: AtomicU64,
     cancels: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// How many worker threads are alive right now. `start` tops this up to
+    /// the configured concurrency instead of always adding more — without
+    /// this, clicking "proses semua" again (or adding/retrying a job) while
+    /// a previous run's worker is still mid-job spawns an *extra* worker on
+    /// top of it, so two jobs end up running at once even though
+    /// `effective_concurrency()` says 1. Whisper/VAD aren't built to share a
+    /// process under that kind of CPU oversubscription — the observed
+    /// symptom was an intermittent "failed to encode" from whisper.cpp that
+    /// always "fixed itself" on retry, because the retry usually landed
+    /// without a second worker still in flight.
+    active_workers: Mutex<usize>,
 }
 
 impl JobQueue {
@@ -143,6 +154,21 @@ impl JobQueue {
     fn unregister_cancel(&self, id: u64) {
         lock(&self.cancels).remove(&id);
     }
+
+    /// Claim however many new worker slots are needed to bring the active
+    /// count up to `target`, and reserve them atomically so two concurrent
+    /// callers (e.g. two quick clicks) can't both think they need to spawn.
+    fn reserve_workers(&self, target: usize) -> usize {
+        let mut active = lock(&self.active_workers);
+        let to_spawn = target.saturating_sub(*active);
+        *active += to_spawn;
+        to_spawn
+    }
+
+    fn release_worker(&self) {
+        let mut active = lock(&self.active_workers);
+        *active = active.saturating_sub(1);
+    }
 }
 
 /// Everything a worker needs besides the job itself: resolved binary/model
@@ -158,18 +184,25 @@ pub struct PipelineContext {
     pub access_token: Option<String>,
 }
 
-/// Spawn one worker thread per unit of configured concurrency; each pulls
-/// jobs off the shared queue until none remain. Safe to call again while
-/// workers from a previous call are still finishing up — an idle worker
-/// that finds nothing queued just exits.
+/// Top up the worker pool to the configured concurrency; each worker pulls
+/// jobs off the shared queue until none remain, then exits. Safe to call
+/// again while workers from a previous call are still active — this only
+/// spawns the shortfall (`target - already active`), so it never ends up
+/// running more workers at once than `effective_concurrency()` allows, no
+/// matter how many times or how close together it's called.
 pub fn start(app: AppHandle, queue: Arc<JobQueue>, app_data_dir: PathBuf, ctx: PipelineContext) {
-    let concurrency = ctx.settings.effective_concurrency();
-    for _ in 0..concurrency {
+    let target = ctx.settings.effective_concurrency();
+    let to_spawn = queue.reserve_workers(target);
+    for _ in 0..to_spawn {
         let app = app.clone();
         let queue = queue.clone();
+        let queue_for_release = queue.clone();
         let app_data_dir = app_data_dir.clone();
         let ctx = ctx.clone();
-        thread::spawn(move || worker_loop(app, queue, app_data_dir, ctx));
+        thread::spawn(move || {
+            worker_loop(app, queue, app_data_dir, ctx);
+            queue_for_release.release_worker();
+        });
     }
 }
 
@@ -454,5 +487,33 @@ mod tests {
         let source = PathBuf::from("/some/where/clip.mov");
         let out = default_output_path(&source, Some(dir.to_str().unwrap()));
         assert_eq!(out, dir.join("clip_autocut.mp4"));
+    }
+
+    #[test]
+    fn reserve_workers_only_spawns_the_shortfall() {
+        let q = JobQueue::default();
+        assert_eq!(q.reserve_workers(1), 1, "first call starts the one worker");
+        assert_eq!(
+            q.reserve_workers(1),
+            0,
+            "a second call while that worker is still active must not stack another one"
+        );
+        q.release_worker();
+        assert_eq!(
+            q.reserve_workers(1),
+            1,
+            "once the worker exits, the next call can start a fresh one"
+        );
+    }
+
+    #[test]
+    fn reserve_workers_tops_up_to_a_higher_target() {
+        let q = JobQueue::default();
+        assert_eq!(q.reserve_workers(1), 1);
+        assert_eq!(
+            q.reserve_workers(3),
+            2,
+            "raising concurrency only spawns the extra slots needed"
+        );
     }
 }

@@ -44,6 +44,15 @@ pub struct TokenResponse {
 const KEYRING_SERVICE: &str = "autocut-llm";
 const KEYRING_USER: &str = "default";
 
+// Separate entry from the OAuth token above — a plain bearer API key for a
+// custom OpenAI-compatible endpoint (no client_id/auth_url/token_url dance),
+// e.g. a self-hosted gateway. Kept in its own keychain slot rather than
+// folded into `TokenResponse` so the two auth modes never collide: setting
+// one doesn't silently clobber the other, and `llm_status` can report which
+// one is actually active.
+const API_KEY_KEYRING_SERVICE: &str = "autocut-llm-apikey";
+const API_KEY_KEYRING_USER: &str = "default";
+
 /// Random, URL-safe PKCE verifier (43-128 chars per RFC 7636; we use 64) and
 /// its S256 challenge.
 pub fn generate_pkce() -> (String, String) {
@@ -258,6 +267,35 @@ pub fn delete_token() -> Result<()> {
     match entry.delete_password() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(anyhow!("removing token from OS keychain: {e}")),
+    }
+}
+
+/// Store a plain bearer API key for a custom OpenAI-compatible provider —
+/// the "I just have a key and a base URL, no OAuth app" path.
+pub fn store_api_key(key: &str) -> Result<()> {
+    let entry = keyring::Entry::new(API_KEY_KEYRING_SERVICE, API_KEY_KEYRING_USER)
+        .context("opening OS keychain entry")?;
+    entry
+        .set_password(key)
+        .context("writing API key to OS keychain")
+}
+
+pub fn load_api_key() -> Result<Option<String>> {
+    let entry = keyring::Entry::new(API_KEY_KEYRING_SERVICE, API_KEY_KEYRING_USER)
+        .context("opening OS keychain entry")?;
+    match entry.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow!("reading API key from OS keychain: {e}")),
+    }
+}
+
+pub fn delete_api_key() -> Result<()> {
+    let entry = keyring::Entry::new(API_KEY_KEYRING_SERVICE, API_KEY_KEYRING_USER)
+        .context("opening OS keychain entry")?;
+    match entry.delete_password() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow!("removing API key from OS keychain: {e}")),
     }
 }
 

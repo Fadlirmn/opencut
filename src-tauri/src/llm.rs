@@ -37,6 +37,34 @@ struct ChatResponseMessage {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
+/// List models the provider's key/token can actually use, via the standard
+/// OpenAI-compatible `GET /models` endpoint. Lets Settings offer a picker
+/// instead of making the user type an exact model id from memory.
+pub fn list_models(api_base: &str, token: &str) -> Result<Vec<String>> {
+    if api_base.is_empty() {
+        return Err(anyhow!("API base belum diisi"));
+    }
+    let url = format!("{}/models", api_base.trim_end_matches('/'));
+    let resp: ModelsResponse = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .context("mengambil daftar model")?
+        .into_json()
+        .context("membaca respons daftar model")?;
+    let mut ids: Vec<String> = resp.data.into_iter().map(|m| m.id).collect();
+    ids.sort();
+    Ok(ids)
+}
+
 const SYSTEM_PROMPT: &str =
     "You correct spelling and punctuation in Indonesian speech transcripts. \
 You will receive one transcript line per input line, numbered. Return exactly the same number of \

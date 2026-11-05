@@ -3,6 +3,7 @@ import {
   llmCancelConnect as apiLlmCancelConnect,
   llmConnect as apiLlmConnect,
   llmDisconnect as apiLlmDisconnect,
+  llmSetApiKey as apiLlmSetApiKey,
   llmStatus as apiLlmStatus,
   llmTest as apiLlmTest,
   logList as apiLogList,
@@ -19,7 +20,7 @@ import type { AppSettings, Job, LlmStatus, LogEntry } from "./types";
 
 export type Page = "upload" | "log" | "settings" | "profile";
 
-const DEFAULT_LLM_STATUS: LlmStatus = { connected: false, provider_label: "" };
+const DEFAULT_LLM_STATUS: LlmStatus = { connected: false, provider_label: "", auth_mode: "none" };
 
 class BatchStore {
   page = $state<Page>("upload");
@@ -142,6 +143,19 @@ class BatchStore {
 
   async cancelLlmConnect() {
     await apiLlmCancelConnect();
+  }
+
+  async setLlmApiKey(key: string) {
+    this.llmBusy = true;
+    this.llmError = null;
+    try {
+      await apiLlmSetApiKey(key);
+      await this.refreshLlmStatus();
+    } catch (e) {
+      this.llmError = String(e);
+    } finally {
+      this.llmBusy = false;
+    }
   }
 
   async disconnectLlm() {

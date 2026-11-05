@@ -227,6 +227,14 @@ export async function llmDisconnect(): Promise<void> {
   await invoke("llm_disconnect");
 }
 
+export async function llmSetApiKey(key: string): Promise<void> {
+  await invoke("llm_set_api_key", { key });
+}
+
+export async function llmListModels(apiBase: string, token?: string): Promise<string[]> {
+  return invoke<string[]>("llm_list_models", { apiBase, token: token ?? null });
+}
+
 export async function llmTest(): Promise<void> {
   await invoke("llm_test");
 }

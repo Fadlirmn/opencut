@@ -786,7 +786,7 @@ pub fn queue_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), Str
     let model = model_path(resource_dir(&app).as_deref()).ok();
     let settings = lock(&state.settings).clone();
     let access_token = if settings.llm.auto_rewrite {
-        oauth::load_token().ok().flatten().map(|t| t.access_token)
+        load_active_llm_token().ok().flatten()
     } else {
         None
     };
@@ -826,22 +826,81 @@ pub fn log_list(state: State<'_, AppState>) -> Result<Vec<logstore::LogEntry>, S
     logstore::list(&state.app_data_dir).map_err(fmt_err)
 }
 
-// ===================== LLM connection (OAuth) =====================
+// ===================== LLM connection (OAuth or plain API key) =====================
+
+/// The bearer token to actually send with an LLM call, picking whichever
+/// auth mode is active. An API key always wins over a stored OAuth token —
+/// if the user has pasted a key for a custom provider, that's the explicit,
+/// most-recent choice; a stale OAuth token from a previously-configured
+/// provider shouldn't silently take over.
+fn load_active_llm_token() -> Result<Option<String>, String> {
+    if let Some(key) = oauth::load_api_key().map_err(fmt_err)? {
+        if !key.is_empty() {
+            return Ok(Some(key));
+        }
+    }
+    Ok(oauth::load_token().map_err(fmt_err)?.map(|t| t.access_token))
+}
 
 #[derive(Debug, Serialize)]
 pub struct LlmStatus {
     pub connected: bool,
     pub provider_label: String,
+    /// "api_key", "oauth", or "none" — which auth mode is actually active,
+    /// so the Settings UI can show the matching card instead of guessing.
+    pub auth_mode: String,
 }
 
 #[tauri::command]
 pub fn llm_status(state: State<'_, AppState>) -> LlmStatus {
-    let connected = oauth::load_token().ok().flatten().is_some();
     let provider_label = lock(&state.settings).llm.provider_label.clone();
-    LlmStatus {
-        connected,
-        provider_label,
+    let has_api_key = oauth::load_api_key()
+        .ok()
+        .flatten()
+        .is_some_and(|k| !k.is_empty());
+    if has_api_key {
+        return LlmStatus {
+            connected: true,
+            provider_label,
+            auth_mode: "api_key".to_string(),
+        };
     }
+    if oauth::load_token().ok().flatten().is_some() {
+        return LlmStatus {
+            connected: true,
+            provider_label,
+            auth_mode: "oauth".to_string(),
+        };
+    }
+    LlmStatus {
+        connected: false,
+        provider_label,
+        auth_mode: "none".to_string(),
+    }
+}
+
+/// Store a plain bearer API key for a custom OpenAI-compatible provider —
+/// the non-OAuth path. `api_base`/`model` from Settings still apply.
+#[tauri::command]
+pub fn llm_set_api_key(key: String) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API key kosong".to_string());
+    }
+    oauth::store_api_key(trimmed).map_err(fmt_err)
+}
+
+/// List models the given (or already-stored) credential can use. `token` is
+/// the draft API key field in Settings, used before the user has pressed
+/// "Simpan & Hubungkan" — once a key/OAuth token is already stored, an empty
+/// `token` falls back to it, so the picker also works from the connected view.
+#[tauri::command]
+pub fn llm_list_models(api_base: String, token: Option<String>) -> Result<Vec<String>, String> {
+    let token = match token.map(|t| t.trim().to_string()) {
+        Some(t) if !t.is_empty() => t,
+        _ => load_active_llm_token()?.ok_or_else(|| "belum ada API key/token".to_string())?,
+    };
+    llm::list_models(&api_base, &token).map_err(fmt_err)
 }
 
 /// Run the full PKCE flow against whatever provider the user configured in
@@ -884,9 +943,13 @@ pub fn llm_cancel_connect(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Clears both auth modes — whichever is actually set just goes away, the
+/// other call is a no-op (`delete_*` already treats a missing entry as
+/// success), so this is safe to call regardless of which one is active.
 #[tauri::command]
 pub fn llm_disconnect() -> Result<(), String> {
-    oauth::delete_token().map_err(fmt_err)
+    oauth::delete_token().map_err(fmt_err)?;
+    oauth::delete_api_key().map_err(fmt_err)
 }
 
 /// One-off manual check: send a short sample through the configured LLM so
@@ -895,10 +958,9 @@ pub fn llm_disconnect() -> Result<(), String> {
 #[tauri::command]
 pub fn llm_test(state: State<'_, AppState>) -> Result<(), String> {
     let llm_settings = lock(&state.settings).llm.clone();
-    let token = oauth::load_token()
-        .map_err(fmt_err)?
-        .ok_or_else(|| "belum terhubung ke LLM".to_string())?;
+    let token =
+        load_active_llm_token()?.ok_or_else(|| "belum terhubung ke LLM".to_string())?;
     let sample = [crate::timeline::TimedText::new(0.0, 1.0, "tes transkrip")];
-    llm::rewrite_transcript(&llm_settings, &token.access_token, &sample).map_err(fmt_err)?;
+    llm::rewrite_transcript(&llm_settings, &token, &sample).map_err(fmt_err)?;
     Ok(())
 }

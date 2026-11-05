@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { batch } from "../lib/batch.svelte";
+  import { llmListModels } from "../lib/api";
   import type { ExportQuality, ExportResolution } from "../lib/types";
 
   onMount(() => {
@@ -22,6 +23,31 @@
 
   async function save() {
     if (batch.settings) await batch.saveSettings(batch.settings);
+  }
+
+  let authTab = $state<"api_key" | "oauth">("api_key");
+  let apiKeyInput = $state("");
+
+  async function connectApiKey() {
+    await batch.setLlmApiKey(apiKeyInput);
+    if (batch.llm.connected) apiKeyInput = "";
+  }
+
+  let modelOptions = $state<string[]>([]);
+  let modelsBusy = $state(false);
+  let modelsError = $state<string | null>(null);
+
+  async function fetchModels() {
+    if (!batch.settings) return;
+    modelsBusy = true;
+    modelsError = null;
+    try {
+      modelOptions = await llmListModels(batch.settings.llm.api_base, apiKeyInput || undefined);
+    } catch (e) {
+      modelsError = String(e);
+    } finally {
+      modelsBusy = false;
+    }
   }
 </script>
 
@@ -127,7 +153,10 @@
           <div class="connected-row">
             <div class="connected-chip">
               <span class="dot"></span>
-              <span class="c-name">terhubung · {batch.llm.provider_label || "provider tersimpan"}</span>
+              <span class="c-name">
+                Terhubung ({batch.llm.auth_mode === "api_key" ? "API Key" : "OAuth"}) ·
+                {batch.llm.provider_label || "provider tersimpan"}
+              </span>
             </div>
             <button class="btn btn-ghost btn-sm" onclick={() => batch.disconnectLlm()} type="button">Putuskan</button>
           </div>
@@ -148,27 +177,21 @@
             </p>
           {/if}
         {:else}
+          <div class="opt">
+            <div class="opt-label">Metode Autentikasi</div>
+            <div class="seg">
+              <button class="seg-btn" class:active={authTab === "api_key"} onclick={() => (authTab = "api_key")} type="button">
+                API Key
+              </button>
+              <button class="seg-btn" class:active={authTab === "oauth"} onclick={() => (authTab = "oauth")} type="button">
+                OAuth
+              </button>
+            </div>
+          </div>
+
           <div class="field">
             <label for="providerLabel">Label Provider</label>
             <input id="providerLabel" type="text" bind:value={s.llm.provider_label} placeholder="mis. Provider Saya" />
-          </div>
-          <div class="field-row">
-            <div class="field">
-              <label for="clientId">Client ID</label>
-              <input id="clientId" type="text" bind:value={s.llm.client_id} />
-            </div>
-            <div class="field">
-              <label for="scope">Scope</label>
-              <input id="scope" type="text" bind:value={s.llm.scope} placeholder="openid profile" />
-            </div>
-          </div>
-          <div class="field">
-            <label for="authUrl">Authorization URL</label>
-            <input id="authUrl" type="text" bind:value={s.llm.auth_url} placeholder="https://provider.example/oauth/authorize" />
-          </div>
-          <div class="field">
-            <label for="tokenUrl">Token URL</label>
-            <input id="tokenUrl" type="text" bind:value={s.llm.token_url} placeholder="https://provider.example/oauth/token" />
           </div>
           <div class="field-row">
             <div class="field">
@@ -177,15 +200,68 @@
             </div>
             <div class="field">
               <label for="model">Model</label>
-              <input id="model" type="text" bind:value={s.llm.model} placeholder="gpt-4o-mini" />
+              <div class="model-row">
+                <input id="model" type="text" list="modelDatalist" bind:value={s.llm.model} placeholder="gpt-4o-mini" />
+                <button
+                  class="btn btn-ghost btn-sm"
+                  disabled={modelsBusy || !s.llm.api_base.trim() || (authTab === "api_key" && !apiKeyInput.trim() && !batch.llm.connected)}
+                  onclick={fetchModels}
+                  type="button"
+                >
+                  {modelsBusy ? "…" : "Ambil Model"}
+                </button>
+              </div>
+              <datalist id="modelDatalist">
+                {#each modelOptions as m (m)}
+                  <option value={m}></option>
+                {/each}
+              </datalist>
+              {#if modelsError}
+                <p class="tip tip-bad">{modelsError}</p>
+              {:else if modelOptions.length > 0}
+                <p class="tip">{modelOptions.length} model ditemukan — pilih dari dropdown field di atas</p>
+              {/if}
             </div>
           </div>
 
-          <button class="btn btn-primary" disabled={batch.llmBusy} onclick={() => batch.connectLlm()} type="button">
-            {batch.llmBusy ? "Membuka Browser…" : "Hubungkan Akun (OAuth)"}
-          </button>
-          {#if batch.llmBusy}
-            <button class="btn btn-ghost btn-sm" onclick={() => batch.cancelLlmConnect()} type="button">Batalkan</button>
+          {#if authTab === "api_key"}
+            <div class="field">
+              <label for="apiKey">API Key</label>
+              <input id="apiKey" type="password" autocomplete="off" bind:value={apiKeyInput} placeholder="sk-..." />
+            </div>
+            <button
+              class="btn btn-primary"
+              disabled={batch.llmBusy || !apiKeyInput.trim()}
+              onclick={connectApiKey}
+              type="button"
+            >
+              {batch.llmBusy ? "Menyimpan…" : "Simpan & Hubungkan"}
+            </button>
+          {:else}
+            <div class="field-row">
+              <div class="field">
+                <label for="clientId">Client ID</label>
+                <input id="clientId" type="text" bind:value={s.llm.client_id} />
+              </div>
+              <div class="field">
+                <label for="scope">Scope</label>
+                <input id="scope" type="text" bind:value={s.llm.scope} placeholder="openid profile" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="authUrl">Authorization URL</label>
+              <input id="authUrl" type="text" bind:value={s.llm.auth_url} placeholder="https://provider.example/oauth/authorize" />
+            </div>
+            <div class="field">
+              <label for="tokenUrl">Token URL</label>
+              <input id="tokenUrl" type="text" bind:value={s.llm.token_url} placeholder="https://provider.example/oauth/token" />
+            </div>
+            <button class="btn btn-primary" disabled={batch.llmBusy} onclick={() => batch.connectLlm()} type="button">
+              {batch.llmBusy ? "Membuka Browser…" : "Hubungkan Akun (OAuth)"}
+            </button>
+            {#if batch.llmBusy}
+              <button class="btn btn-ghost btn-sm" onclick={() => batch.cancelLlmConnect()} type="button">Batalkan</button>
+            {/if}
           {/if}
           {#if batch.llmError}
             <p class="tip tip-bad">{batch.llmError}</p>
@@ -194,9 +270,11 @@
 
         <div class="divider"></div>
         <div class="info-banner">
-          autocut tidak punya aplikasi OAuth terdaftar di provider manapun — isi kredensial aplikasi OAuth
-          milikmu sendiri di atas. Hanya <strong>teks transkrip</strong> yang terkirim ke LLM; video tetap
-          diproses 100% lokal. Token disimpan di keychain OS, bukan di file biasa.
+          Pakai <strong>API Key</strong> buat provider custom/self-hosted (tinggal tempel key + API base) —
+          atau <strong>OAuth</strong> kalau provider-nya butuh login akun; autocut tidak punya aplikasi OAuth
+          terdaftar di provider manapun, jadi isi kredensial aplikasi OAuth milikmu sendiri. Hanya
+          <strong>teks transkrip</strong> yang terkirim ke LLM; video tetap diproses 100% lokal. Key/token
+          disimpan di keychain OS, bukan di file biasa.
         </div>
       </div>
     </div>
@@ -413,6 +491,14 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--muted-2);
+  }
+  .model-row {
+    display: flex;
+    gap: 6px;
+  }
+  .model-row input {
+    flex: 1;
+    min-width: 0;
   }
   .field-row {
     display: grid;

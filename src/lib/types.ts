@@ -136,7 +136,10 @@ export type AppSettings = {
   llm: LlmSettings;
 };
 
+export type LlmAuthMode = "api_key" | "oauth" | "none";
+
 export type LlmStatus = {
   connected: boolean;
   provider_label: string;
+  auth_mode: LlmAuthMode;
 };

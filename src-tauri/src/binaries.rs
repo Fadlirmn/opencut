@@ -148,6 +148,13 @@ fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
         }
     }
     if let Some(rd) = resource_dir {
+        // tauri.conf.json ships the model as a `resources` entry with a
+        // `models/` subpath ("models/ggml-small-q8_0.bin"), and Tauri
+        // preserves that relative path under resource_dir — unlike
+        // `externalBin` sidecars (ffmpeg/ffprobe), which always land flat.
+        // The flat candidate stays as a harmless fallback in case that
+        // config path ever changes.
+        candidates.push(rd.join("models").join(WHISPER_MODEL_FILENAME));
         candidates.push(rd.join(WHISPER_MODEL_FILENAME));
     }
     candidates.push(

@@ -74,6 +74,8 @@ pub fn run() {
             commands::llm_connect,
             commands::llm_cancel_connect,
             commands::llm_disconnect,
+            commands::llm_set_api_key,
+            commands::llm_list_models,
             commands::llm_test,
         ])
         .run(tauri::generate_context!())
