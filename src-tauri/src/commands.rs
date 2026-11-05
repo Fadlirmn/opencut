@@ -839,7 +839,9 @@ fn load_active_llm_token() -> Result<Option<String>, String> {
             return Ok(Some(key));
         }
     }
-    Ok(oauth::load_token().map_err(fmt_err)?.map(|t| t.access_token))
+    Ok(oauth::load_token()
+        .map_err(fmt_err)?
+        .map(|t| t.access_token))
 }
 
 #[derive(Debug, Serialize)]
@@ -958,8 +960,7 @@ pub fn llm_disconnect() -> Result<(), String> {
 #[tauri::command]
 pub fn llm_test(state: State<'_, AppState>) -> Result<(), String> {
     let llm_settings = lock(&state.settings).llm.clone();
-    let token =
-        load_active_llm_token()?.ok_or_else(|| "belum terhubung ke LLM".to_string())?;
+    let token = load_active_llm_token()?.ok_or_else(|| "belum terhubung ke LLM".to_string())?;
     let sample = [crate::timeline::TimedText::new(0.0, 1.0, "tes transkrip")];
     llm::rewrite_transcript(&llm_settings, &token, &sample).map_err(fmt_err)?;
     Ok(())

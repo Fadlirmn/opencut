@@ -62,7 +62,10 @@ fn run() -> anyhow::Result<()> {
     run_models(&models, &raw, "raw")?;
 
     if denoise {
-        println!("\nextracting denoised audio (afftdn) from {}", video.display());
+        println!(
+            "\nextracting denoised audio (afftdn) from {}",
+            video.display()
+        );
         let denoised = audio::extract_pcm_denoised(&ffmpeg, &video, None)?;
         run_models(&models, &denoised, "denoised")?;
     }
@@ -72,10 +75,7 @@ fn run() -> anyhow::Result<()> {
 
 fn run_models(models: &[PathBuf], samples: &[i16], label: &str) -> anyhow::Result<()> {
     for model in models {
-        println!(
-            "\n--- model={} audio={label} ---",
-            model.display()
-        );
+        println!("\n--- model={} audio={label} ---", model.display());
         let start = Instant::now();
         let segments = transcribe::transcribe(model, samples, Arc::new(AtomicBool::new(false)))?;
         let elapsed = start.elapsed();
