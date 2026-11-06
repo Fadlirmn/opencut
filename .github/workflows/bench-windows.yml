@@ -73,3 +73,35 @@ jobs:
           name: bench-whisper-windows
           path: src-tauri/target/release/examples/bench_whisper.exe
           if-no-files-found: error
+
+  # Same bench on a Linux runner with the same vCPU count, so the Windows
+  # number has a like-for-like reference.
+  bench-linux:
+    runs-on: ubuntu-latest
+    env:
+      AUTOCUT_STUB_SIDECARS: '1'
+      GGML_NATIVE: 'OFF'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-bench-linux
+          workspaces: src-tauri
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+      - name: Build bench example
+        working-directory: src-tauri
+        run: |
+          mkdir -p ../dist && echo '<!doctype html>' > ../dist/index.html
+          cargo build --release --example bench_whisper
+      - name: Run bench
+        working-directory: src-tauri
+        run: |
+          curl -sSL -o model.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+          python3 -c "import math,struct,sys; sys.stdout.buffer.write(b''.join(struct.pack('<h', int(8000*math.sin(2*math.pi*440*i/16000))) for i in range(16000*20)))" > audio.s16le
+          ./target/release/examples/bench_whisper audio.s16le model.bin
