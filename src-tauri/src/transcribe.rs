@@ -54,8 +54,18 @@ pub fn transcribe(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
 
-    let abort_flag = cancel.clone();
-    params.set_abort_callback_safe(move || abort_flag.load(Ordering::SeqCst));
+    // Not `set_abort_callback_safe`: in whisper-rs 0.16 it boxes the closure as
+    // `Box<Box<dyn FnMut>>` but its trampoline casts the pointer back to the
+    // concrete closure type, so the flag is read from the wrong address. Any
+    // non-zero garbage there aborts the encoder, which surfaces as a random
+    // "failed to encode" (-6) that disappears on retry.
+    //
+    // SAFETY: `cancel` is an `Arc` owned by this function and outlives the
+    // `state.full` call below, so the pointer stays valid for every callback.
+    unsafe {
+        params.set_abort_callback(Some(abort_trampoline));
+        params.set_abort_callback_user_data(Arc::as_ptr(&cancel) as *mut std::ffi::c_void);
+    }
 
     state
         .full(params, &pcm)
@@ -77,6 +87,12 @@ pub fn transcribe(
         }
     }
     Ok(out)
+}
+
+unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool {
+    // SAFETY: user_data is `Arc::as_ptr` of the `AtomicBool` set in `transcribe`.
+    let flag = &*(user_data as *const AtomicBool);
+    flag.load(Ordering::SeqCst)
 }
 
 fn is_cancelled(flag: &AtomicBool) -> bool {
