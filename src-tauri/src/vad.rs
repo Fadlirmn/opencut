@@ -59,6 +59,17 @@ pub fn detect(samples: &[i16], params: VadParams, time_offset: f64) -> Result<Ve
 /// still by CutList. So a caller can score once per file and re-segment for
 /// free every time the user moves a slider.
 pub fn score_chunks(samples: &[i16], cancel: Option<&AtomicBool>) -> Result<Vec<f32>> {
+    score_chunks_with_progress(samples, cancel, &mut |_| {})
+}
+
+/// [`score_chunks`] that reports the fraction (0.0-1.0) of audio scored so
+/// far, about every 30 seconds of audio.
+pub fn score_chunks_with_progress(
+    samples: &[i16],
+    cancel: Option<&AtomicBool>,
+    on_progress: &mut dyn FnMut(f32),
+) -> Result<Vec<f32>> {
+    let total_chunks = samples.len().div_ceil(CHUNK_SIZE).max(1);
     let mut vad = VoiceActivityDetector::builder()
         .sample_rate(VAD_SAMPLE_RATE as i64)
         .chunk_size(CHUNK_SIZE)
@@ -70,10 +81,14 @@ pub fn score_chunks(samples: &[i16], cancel: Option<&AtomicBool>) -> Result<Vec<
         if i % 64 == 0 && is_cancelled(cancel) {
             return Err(anyhow!("detection cancelled"));
         }
+        if i % 1024 == 0 {
+            on_progress(i as f32 / total_chunks as f32);
+        }
         // Converted a chunk at a time, straight into the model's iterator, so
         // no float copy of the track ever exists.
         scores.push(vad.predict(chunk.iter().copied().map(to_unit)));
     }
+    on_progress(1.0);
     Ok(scores)
 }
 

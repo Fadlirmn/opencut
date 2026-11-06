@@ -446,7 +446,8 @@ pub async fn generate_subtitles(
 
     let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let samples = cache.samples(&ffmpeg, &source, cancel_for_worker.clone())?;
-        let segments = transcribe(&model, &samples, cancel_for_worker.clone()).map_err(fmt_err)?;
+        let segments =
+            transcribe(&model, &samples, cancel_for_worker.clone(), |_| {}).map_err(fmt_err)?;
         let output_segments = map_to_output(&cutlist, &segments);
         let style = SubtitleStyle::default();
         Ok(match format {

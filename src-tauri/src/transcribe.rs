@@ -23,10 +23,14 @@ const LANGUAGE: &str = "id";
 /// `cancel` is checked before loading the model and polled by whisper's abort
 /// callback during inference; whisper.cpp has no mid-segment resume, so an
 /// aborted run returns an error rather than partial output.
+///
+/// `on_progress` receives whisper's own 0-100 progress as inference advances
+/// (called from whisper's worker thread, roughly once per 30s audio window).
 pub fn transcribe(
     model_path: &Path,
     samples: &[i16],
     cancel: Arc<AtomicBool>,
+    on_progress: impl FnMut(i32),
 ) -> Result<Vec<TimedText>> {
     if is_cancelled(&cancel) {
         return Err(anyhow!("transcription cancelled"));
@@ -67,6 +71,19 @@ pub fn transcribe(
         params.set_abort_callback_user_data(Arc::as_ptr(&cancel) as *mut std::ffi::c_void);
     }
 
+    // Same reason as above for skipping `set_progress_callback_safe`: own
+    // trampoline, own pointer. The boxed `dyn FnMut` lives on this stack frame
+    // until `state.full` returns, so the pointer is valid for every call.
+    let mut progress: Box<dyn FnMut(i32) + '_> = Box::new(on_progress);
+    // SAFETY: `progress` outlives `state.full`; the trampoline casts back to
+    // exactly the type whose address is passed here.
+    unsafe {
+        params.set_progress_callback(Some(progress_trampoline));
+        params.set_progress_callback_user_data(
+            &mut progress as *mut Box<dyn FnMut(i32) + '_> as *mut std::ffi::c_void,
+        );
+    }
+
     state
         .full(params, &pcm)
         .context("running whisper transcription")?;
@@ -87,6 +104,17 @@ pub fn transcribe(
         }
     }
     Ok(out)
+}
+
+unsafe extern "C" fn progress_trampoline(
+    _ctx: *mut whisper_rs::WhisperSysContext,
+    _state: *mut whisper_rs::WhisperSysState,
+    progress: std::ffi::c_int,
+    user_data: *mut std::ffi::c_void,
+) {
+    // SAFETY: user_data points at the `Box<dyn FnMut(i32)>` set in `transcribe`.
+    let cb = &mut *(user_data as *mut Box<dyn FnMut(i32)>);
+    cb(progress);
 }
 
 unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool {

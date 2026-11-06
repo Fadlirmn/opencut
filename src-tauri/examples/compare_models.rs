@@ -84,7 +84,8 @@ fn run_models(models: &[PathBuf], samples: &[i16], label: &str) -> anyhow::Resul
     for model in models {
         println!("\n--- model={} audio={label} ---", model.display());
         let start = Instant::now();
-        let segments = transcribe::transcribe(model, samples, Arc::new(AtomicBool::new(false)))?;
+        let segments =
+            transcribe::transcribe(model, samples, Arc::new(AtomicBool::new(false)), |_| {})?;
         let elapsed = start.elapsed();
         for seg in &segments {
             println!("[{:>7.2}-{:>7.2}] {}", seg.start, seg.end, seg.text);

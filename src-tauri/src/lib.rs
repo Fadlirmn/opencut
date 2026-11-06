@@ -9,6 +9,7 @@ pub mod logstore;
 pub mod model;
 pub mod oauth;
 pub mod probe;
+pub mod progress;
 pub mod queue;
 pub mod settings;
 pub mod subtitle;

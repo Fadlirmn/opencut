@@ -16,18 +16,19 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::audio::extract_pcm_with_cancel;
+use crate::audio::extract_pcm_with_progress;
 use crate::cutlist::CutList;
 use crate::export_mp4::{self, ExportOptions};
 use crate::llm::rewrite_transcript;
 use crate::logstore::{self, LogEntry};
 use crate::probe::probe;
+use crate::progress::{fmt_clock, Progress, Stage, StageSpec};
 use crate::settings::AppSettings;
 use crate::subtitle::{render_ass, SubtitleStyle, VideoSize};
 use crate::sync::lock;
 use crate::timeline::map_to_output;
 use crate::transcribe::transcribe;
-use crate::vad::{score_chunks, segments_from_scores, VadParams};
+use crate::vad::{score_chunks_with_progress, segments_from_scores, VadParams};
 
 const DEFAULT_PAD_SECONDS: f64 = 0.3;
 
@@ -50,6 +51,8 @@ pub struct Job {
     pub message: String,
     pub output_path: Option<String>,
     pub error: Option<String>,
+    /// Per-stage progress of the current or last run; empty while queued.
+    pub stages: Vec<Stage>,
 }
 
 #[derive(Default)]
@@ -86,6 +89,7 @@ impl JobQueue {
             message: "menunggu".to_string(),
             output_path: None,
             error: None,
+            stages: Vec::new(),
         };
         lock(&self.jobs).push(job.clone());
         job
@@ -122,6 +126,7 @@ impl JobQueue {
                 j.pct = 0.0;
                 j.message = "menunggu".to_string();
                 j.error = None;
+                j.stages.clear();
             }
         }
     }
@@ -216,22 +221,39 @@ fn worker_loop(app: AppHandle, queue: Arc<JobQueue>, app_data_dir: PathBuf, ctx:
         let job_id = job.id;
         let queue_for_progress = queue.clone();
         let app_for_progress = app.clone();
-        let report = move |pct: f32, message: &str| {
-            queue_for_progress.update(job_id, |j| {
-                j.pct = pct;
-                j.message = message.to_string();
-            });
-            emit_snapshot(&app_for_progress, &queue_for_progress);
-        };
+        let progress = Progress::new(
+            &stage_specs(ctx.settings.burn_subtitles, has_llm(&ctx)),
+            Arc::new(move |stages: &[Stage], overall: f32, message: &str| {
+                queue_for_progress.update(job_id, |j| {
+                    j.pct = overall;
+                    j.message = message.to_string();
+                    j.stages = stages.to_vec();
+                });
+                emit_snapshot(&app_for_progress, &queue_for_progress);
+            }),
+        );
 
+        let started = std::time::Instant::now();
         let source = PathBuf::from(&job.path);
-        let outcome = process_one(&ctx, &source, cancel.clone(), report);
+        let outcome = process_one(&ctx, &source, cancel.clone(), &progress);
         queue.unregister_cancel(job.id);
 
-        let (success, output_path, error) = match &outcome {
-            Ok(path) => (true, Some(path.display().to_string()), None),
-            Err(e) => (false, None, Some(format!("{e:#}"))),
+        let (success, output_path, error, failed_stage) = match &outcome {
+            Ok(path) => {
+                progress.finish();
+                (true, Some(path.display().to_string()), None, None)
+            }
+            Err(e) => {
+                let stage = progress.fail();
+                let msg = format!("{e:#}");
+                let shown = match &stage {
+                    Some(label) => format!("gagal di tahap {label}: {msg}"),
+                    None => msg,
+                };
+                (false, None, Some(shown), stage)
+            }
         };
+        let stages = progress.stages();
         queue.update(job.id, |j| {
             j.state = if success {
                 JobState::Done
@@ -246,6 +268,7 @@ fn worker_loop(app: AppHandle, queue: Arc<JobQueue>, app_data_dir: PathBuf, ctx:
             };
             j.output_path = output_path.clone();
             j.error = error.clone();
+            j.stages = stages.clone();
         });
         emit_snapshot(&app, &queue);
 
@@ -262,6 +285,16 @@ fn worker_loop(app: AppHandle, queue: Arc<JobQueue>, app_data_dir: PathBuf, ctx:
                 output_path,
                 error,
                 subtitles: ctx.settings.burn_subtitles,
+                source_path: Some(job.path.clone()),
+                duration_secs: Some(started.elapsed().as_secs_f64()),
+                failed_stage,
+                stages,
+                app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                os: Some(format!(
+                    "{} {}",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                )),
             },
         );
     }
@@ -271,13 +304,38 @@ fn emit_snapshot(app: &AppHandle, queue: &JobQueue) {
     let _ = app.emit("queue-updated", queue.snapshot());
 }
 
-/// Run the fixed pipeline for one video. `report` is called with a
-/// monotonically increasing 0-100 progress value and a short status message.
+fn has_llm(ctx: &PipelineContext) -> bool {
+    ctx.settings.burn_subtitles && ctx.settings.llm.auto_rewrite && ctx.access_token.is_some()
+}
+
+/// The stages a run will go through, given its settings. Weights are rough
+/// shares of wall time on a CPU-only laptop: transcription dominates.
+fn stage_specs(subtitles: bool, llm: bool) -> Vec<StageSpec> {
+    let mut v: Vec<StageSpec> = vec![
+        ("probe", "Membaca info video", 1.0),
+        ("extract", "Mengekstrak audio", 6.0),
+        ("detect", "Mendeteksi keheningan", 8.0),
+    ];
+    if subtitles {
+        v.push(("transcribe", "Mentranskrip ucapan", 60.0));
+        if llm {
+            v.push(("llm", "Merapikan transkrip (LLM)", 5.0));
+        }
+    }
+    v.push((
+        "export",
+        "Mengekspor MP4",
+        if subtitles { 25.0 } else { 40.0 },
+    ));
+    v
+}
+
+/// Run the fixed pipeline for one video, reporting each stage to `progress`.
 fn process_one(
     ctx: &PipelineContext,
     source: &Path,
     cancel: Arc<AtomicBool>,
-    report: impl Fn(f32, &str) + Clone + Send + Sync + 'static,
+    progress: &Progress,
 ) -> Result<PathBuf> {
     let PipelineContext {
         ffmpeg,
@@ -292,7 +350,8 @@ fn process_one(
     if cancel.load(Ordering::SeqCst) {
         return Err(anyhow!("dibatalkan"));
     }
-    report(2.0, "membaca info video");
+
+    progress.begin("probe");
     let info = probe(ffprobe, source).map_err(|e| anyhow!("{e:#}"))?;
     if !info.has_video {
         return Err(anyhow!("file ini tidak punya gambar video"));
@@ -302,33 +361,83 @@ fn process_one(
             "video ini tidak punya audio — tidak ada keheningan untuk dideteksi"
         ));
     }
+    progress.set_detail(
+        "probe",
+        format!(
+            "{}x{} · {:.0} fps · {}",
+            info.width,
+            info.height,
+            info.fps,
+            fmt_clock(info.duration)
+        ),
+    );
+    let total = info.duration.max(0.001);
 
-    report(6.0, "mengekstrak audio");
-    let samples = extract_pcm_with_cancel(ffmpeg, source, Some(cancel.clone()))
-        .map_err(|e| anyhow!("{e:#}"))?;
+    progress.begin("extract");
+    let samples = extract_pcm_with_progress(ffmpeg, source, Some(cancel.clone()), &mut |secs| {
+        progress.update(
+            (secs / total * 100.0) as f32,
+            format!("audio {} / {}", fmt_clock(secs), fmt_clock(total)),
+        )
+    })
+    .map_err(|e| anyhow!("{e:#}"))?;
 
-    report(20.0, "mendeteksi keheningan");
+    progress.begin("detect");
     let vad_params = VadParams::default();
-    let scores = score_chunks(&samples, Some(cancel.as_ref())).map_err(|e| anyhow!("{e:#}"))?;
+    let scores = score_chunks_with_progress(&samples, Some(cancel.as_ref()), &mut |frac| {
+        progress.update(
+            frac * 100.0,
+            format!(
+                "audio {} / {}",
+                fmt_clock(frac as f64 * total),
+                fmt_clock(total)
+            ),
+        )
+    })
+    .map_err(|e| anyhow!("{e:#}"))?;
     let segments = segments_from_scores(&scores, vad_params, 0.0);
     let cutlist = CutList::from_speech_segments(&segments, info.duration, DEFAULT_PAD_SECONDS);
     cutlist.ensure_exportable().map_err(|e| anyhow!("{e:#}"))?;
+    let kept = cutlist.total_kept_duration();
+    progress.set_detail(
+        "detect",
+        format!(
+            "{} bagian bicara · sisa {} dari {}",
+            segments.len(),
+            fmt_clock(kept),
+            fmt_clock(total)
+        ),
+    );
 
     let mut subtitle_ass: Option<String> = None;
     if settings.burn_subtitles {
         let model = model.ok_or_else(|| anyhow!("model whisper belum tersedia"))?;
-        report(45.0, "mentranskrip ucapan");
-        let raw_segments =
-            transcribe(model, &samples, cancel.clone()).map_err(|e| anyhow!("{e:#}"))?;
+        progress.begin("transcribe");
+        progress.update(0.0, "memuat model");
+        let progress_for_whisper = progress.clone();
+        let raw_segments = transcribe(model, &samples, cancel.clone(), move |pct| {
+            let pct = pct.clamp(0, 100) as f64;
+            progress_for_whisper.update(
+                pct as f32,
+                format!(
+                    "audio {} / {}",
+                    fmt_clock(pct / 100.0 * total),
+                    fmt_clock(total)
+                ),
+            );
+        })
+        .map_err(|e| anyhow!("{e:#}"))?;
+        progress.set_detail("transcribe", format!("{} segmen teks", raw_segments.len()));
         let mut mapped = map_to_output(&cutlist, &raw_segments);
 
         if settings.llm.auto_rewrite {
             if let Some(token) = access_token {
-                report(62.0, "merapikan transkrip dengan llm");
+                progress.begin("llm");
                 // Best-effort: a failed rewrite keeps whisper's own text
                 // rather than aborting an otherwise-successful export.
-                if let Ok(rewritten) = rewrite_transcript(&settings.llm, token, &mapped) {
-                    mapped = rewritten;
+                match rewrite_transcript(&settings.llm, token, &mapped) {
+                    Ok(rewritten) => mapped = rewritten,
+                    Err(e) => progress.set_detail("llm", format!("dilewati: {e:#}")),
                 }
             }
         }
@@ -341,7 +450,7 @@ fn process_one(
         subtitle_ass = Some(render_ass(&mapped, video, &style));
     }
 
-    report(75.0, "mengekspor mp4");
+    progress.begin("export");
     let output = default_output_path(source, settings.output_dir.as_deref());
     let options = ExportOptions {
         quality: settings.quality.into(),
@@ -349,7 +458,7 @@ fn process_one(
         has_audio: info.has_audio,
         subtitle_ass,
     };
-    let report_for_export = report.clone();
+    let progress_for_export = progress.clone();
     export_mp4::export(
         ffmpeg,
         source,
@@ -358,12 +467,16 @@ fn process_one(
         options,
         cancel,
         move |p: export_mp4::ExportProgress| {
-            report_for_export(75.0 + p.pct * 0.25, &p.message);
+            let done = p.pct as f64 / 100.0 * kept;
+            progress_for_export.update(
+                p.pct,
+                format!("video {} / {}", fmt_clock(done), fmt_clock(kept)),
+            );
         },
     )
     .map_err(|e| anyhow!("{e:#}"))?;
+    progress.set_detail("export", output.display().to_string());
 
-    report(100.0, "selesai");
     Ok(output)
 }
 

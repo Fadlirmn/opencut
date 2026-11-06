@@ -13,7 +13,7 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{ChildStderr, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -37,7 +37,24 @@ pub fn extract_pcm_with_cancel(
     video: &Path,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<i16>> {
-    run_extract(build_extract_cmd(ffmpeg, video, false), video, cancel)
+    run_extract(build_extract_cmd(ffmpeg, video, false), video, cancel, None)
+}
+
+/// [`extract_pcm_with_cancel`] that also reports progress: `on_progress` gets
+/// the number of seconds of audio decoded so far, called on the calling
+/// thread roughly every 25ms while ffmpeg runs.
+pub fn extract_pcm_with_progress(
+    ffmpeg: &Path,
+    video: &Path,
+    cancel: Option<Arc<AtomicBool>>,
+    on_progress: &mut dyn FnMut(f64),
+) -> Result<Vec<i16>> {
+    run_extract(
+        build_extract_cmd(ffmpeg, video, false),
+        video,
+        cancel,
+        Some(on_progress),
+    )
 }
 
 /// Same extraction as [`extract_pcm_with_cancel`], but with ffmpeg's `afftdn`
@@ -49,7 +66,7 @@ pub fn extract_pcm_denoised(
     video: &Path,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<i16>> {
-    run_extract(build_extract_cmd(ffmpeg, video, true), video, cancel)
+    run_extract(build_extract_cmd(ffmpeg, video, true), video, cancel, None)
 }
 
 fn build_extract_cmd(ffmpeg: &Path, video: &Path, denoise: bool) -> Command {
@@ -78,13 +95,15 @@ fn run_extract(
     mut cmd: Command,
     video: &Path,
     cancel: Option<Arc<AtomicBool>>,
+    mut on_progress: Option<&mut dyn FnMut(f64)>,
 ) -> Result<Vec<i16>> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning ffmpeg for {}", video.display()))?;
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
     let stderr = child.stderr.take().ok_or_else(|| anyhow!("no stderr"))?;
-    let stdout_reader = read_samples(stdout, cancel.clone());
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let stdout_reader = read_samples(stdout, cancel.clone(), decoded.clone());
     let stderr_reader = read_stderr(stderr);
 
     let status = loop {
@@ -98,6 +117,9 @@ fn run_extract(
         if let Some(status) = child.try_wait().context("checking ffmpeg status")? {
             break status;
         }
+        if let Some(cb) = on_progress.as_mut() {
+            cb(decoded.load(Ordering::Relaxed) as f64 / VAD_SAMPLE_RATE as f64);
+        }
         thread::sleep(Duration::from_millis(25));
     };
 
@@ -109,7 +131,13 @@ fn run_extract(
         .join()
         .map_err(|_| anyhow!("ffmpeg stderr reader panicked"))?;
     if !status.success() {
-        return Err(anyhow!("ffmpeg failed ({status}): {err}"));
+        return Err(anyhow!(
+            "ffmpeg gagal mengekstrak audio ({status}): {}",
+            err.trim()
+        ));
+    }
+    if let Some(cb) = on_progress.as_mut() {
+        cb(samples.len() as f64 / VAD_SAMPLE_RATE as f64);
     }
 
     // Growth doubling can leave the vector holding up to twice what it needs,
@@ -127,6 +155,7 @@ const READ_CHUNK: usize = 64 * 1024;
 fn read_samples(
     mut stdout: ChildStdout,
     cancel: Option<Arc<AtomicBool>>,
+    decoded: Arc<AtomicUsize>,
 ) -> thread::JoinHandle<Result<Vec<i16>>> {
     thread::spawn(move || {
         let mut buf = vec![0u8; READ_CHUNK];
@@ -141,6 +170,7 @@ fn read_samples(
                 break;
             }
             carry = drain_samples(carry, &buf[..read], &mut samples);
+            decoded.store(samples.len(), Ordering::Relaxed);
         }
         Ok(samples)
     })

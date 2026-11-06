@@ -18,6 +18,43 @@ pub struct LogEntry {
     pub output_path: Option<String>,
     pub error: Option<String>,
     pub subtitles: bool,
+    /// Detail fields added in 0.0.10. All optional/defaulted so logs written
+    /// by older versions still parse.
+    #[serde(default)]
+    pub source_path: Option<String>,
+    /// Wall time of the whole run.
+    #[serde(default)]
+    pub duration_secs: Option<f64>,
+    /// Label of the stage that failed, when the run failed.
+    #[serde(default)]
+    pub failed_stage: Option<String>,
+    /// Per-stage state, timing and detail at the end of the run.
+    #[serde(default)]
+    pub stages: Vec<crate::progress::Stage>,
+    #[serde(default)]
+    pub app_version: Option<String>,
+    #[serde(default)]
+    pub os: Option<String>,
+}
+
+#[cfg(test)]
+impl LogEntry {
+    fn blank() -> Self {
+        LogEntry {
+            name: String::new(),
+            finished_at_ms: 0,
+            success: false,
+            output_path: None,
+            error: None,
+            subtitles: false,
+            source_path: None,
+            duration_secs: None,
+            failed_stage: None,
+            stages: Vec::new(),
+            app_version: None,
+            os: None,
+        }
+    }
 }
 
 const MAX_ENTRIES: usize = 500;
@@ -65,6 +102,16 @@ mod tests {
     }
 
     #[test]
+    fn old_entries_without_detail_fields_still_parse() {
+        let old = r#"[{"name":"a.mp4","finished_at_ms":1,"success":false,
+            "output_path":null,"error":"boom","subtitles":true}]"#;
+        let entries: Vec<LogEntry> = serde_json::from_str(old).unwrap();
+        assert_eq!(entries[0].error.as_deref(), Some("boom"));
+        assert!(entries[0].stages.is_empty());
+        assert!(entries[0].failed_stage.is_none());
+    }
+
+    #[test]
     fn append_inserts_newest_first() {
         let dir = tmp_dir("order");
         let _ = fs::remove_dir_all(&dir);
@@ -77,6 +124,7 @@ mod tests {
                 output_path: None,
                 error: None,
                 subtitles: false,
+                ..LogEntry::blank()
             },
         )
         .unwrap();
@@ -89,6 +137,7 @@ mod tests {
                 output_path: None,
                 error: None,
                 subtitles: false,
+                ..LogEntry::blank()
             },
         )
         .unwrap();

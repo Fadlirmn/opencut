@@ -93,6 +93,20 @@ export type DiagnosticInfo = {
 
 export type JobState = "queued" | "running" | "done" | "failed";
 
+export type StageState = "pending" | "running" | "done" | "failed";
+
+/// One step of a pipeline run (probe, extract, detect, transcribe, export…).
+export type Stage = {
+  key: string;
+  label: string;
+  state: StageState;
+  /// 0-100 within this stage.
+  pct: number;
+  detail: string;
+  elapsed_secs: number;
+  eta_secs: number | null;
+};
+
 export type Job = {
   id: number;
   name: string;
@@ -102,6 +116,7 @@ export type Job = {
   message: string;
   output_path: string | null;
   error: string | null;
+  stages: Stage[];
 };
 
 export type LogEntry = {
@@ -113,6 +128,13 @@ export type LogEntry = {
   output_path: string | null;
   error: string | null;
   subtitles: boolean;
+  /// Detail fields, present on entries written by 0.0.10 and later.
+  source_path?: string | null;
+  duration_secs?: number | null;
+  failed_stage?: string | null;
+  stages?: Stage[];
+  app_version?: string | null;
+  os?: string | null;
 };
 
 export type LlmSettings = {

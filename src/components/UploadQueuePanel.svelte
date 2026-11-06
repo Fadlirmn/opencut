@@ -5,6 +5,7 @@
   import { batch } from "../lib/batch.svelte";
   import { openWithDefaultApp } from "../lib/api";
   import ModelDownloadPrompt from "./ModelDownloadPrompt.svelte";
+  import StageList from "./StageList.svelte";
 
   const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi)$/i;
 
@@ -12,6 +13,8 @@
   let processOpen = $state(true);
   let doneOpen = $state(true);
   let starting = $state(false);
+  /// Finished jobs whose stage breakdown is expanded.
+  let expanded = $state<Record<number, boolean>>({});
 
   onMount(() => {
     let unlisten: (() => void) | null = null;
@@ -108,6 +111,7 @@
         <p class="empty muted-2">Tidak ada video dalam antrian — tambahkan di atas.</p>
       {:else}
         {#each processingJobs as job (job.id)}
+          <div class="q-item">
           <div class="q-row">
             <div class="q-info">
               <div class="q-name" title={job.path}>{job.name}</div>
@@ -129,6 +133,10 @@
               onclick={() => batch.remove(job.id)}
               type="button"
             >×</button>
+          </div>
+          {#if job.state === "running" && job.stages.length}
+            <div class="q-stages"><StageList stages={job.stages} /></div>
+          {/if}
           </div>
         {/each}
       {/if}
@@ -176,6 +184,7 @@
         <p class="empty muted-2">Belum ada video yang selesai diproses.</p>
       {:else}
         {#each finishedJobs as job (job.id)}
+          <div class="q-item">
           <div class="q-row">
             <div class="q-info">
               <div class="q-name" title={job.path}>{job.name}</div>
@@ -196,11 +205,27 @@
               {/if}
             {:else}
               <span class="pill pill-fail mono">gagal</span>
+              {#if job.stages.length}
+                <button
+                  class="btn btn-ghost btn-sm"
+                  onclick={() => (expanded[job.id] = !expanded[job.id])}
+                  type="button"
+                >{expanded[job.id] ? "Tutup" : "Detail"}</button>
+              {/if}
               <button class="btn btn-ghost btn-sm" onclick={() => batch.retry(job.id)} type="button">
                 Coba Lagi
               </button>
             {/if}
             <button class="icon-btn" title="Hapus" onclick={() => batch.remove(job.id)} type="button">×</button>
+          </div>
+          {#if expanded[job.id] && job.stages.length}
+            <div class="q-stages">
+              <StageList stages={job.stages} />
+              {#if job.error}
+                <pre class="q-error mono">{job.error}</pre>
+              {/if}
+            </div>
+          {/if}
           </div>
         {/each}
       {/if}
@@ -336,6 +361,27 @@
     gap: 12px;
     padding: 9px 10px;
     border-radius: var(--radius-sm);
+  }
+  .q-item {
+    display: flex;
+    flex-direction: column;
+  }
+  .q-stages {
+    padding: 4px 14px 12px 14px;
+  }
+  .q-error {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    font-size: 10.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow: auto;
+    color: var(--neg);
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    user-select: text;
   }
   .q-row:hover {
     background: var(--surface-2);

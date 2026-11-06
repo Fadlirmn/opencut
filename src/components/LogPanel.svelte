@@ -2,6 +2,48 @@
   import { onMount } from "svelte";
   import { batch } from "../lib/batch.svelte";
   import { revealInFinder, openWithDefaultApp } from "../lib/api";
+  import type { LogEntry } from "../lib/types";
+  import { fmtDuration } from "../lib/clock";
+  import StageList from "./StageList.svelte";
+
+  /// Rows whose detail panel is open, keyed by entryKey().
+  let open = $state<Record<string, boolean>>({});
+  let copied = $state<string | null>(null);
+
+  function hasDetail(e: LogEntry): boolean {
+    return !!(e.error || e.stages?.length || e.source_path);
+  }
+
+  /// Plain-text report of one run, for pasting into a bug report.
+  function reportText(e: LogEntry): string {
+    const lines = [
+      `file: ${e.source_path ?? e.name}`,
+      `status: ${e.success ? "berhasil" : "gagal"}`,
+      `selesai: ${fmtDate(e.finished_at_ms)}`,
+    ];
+    if (e.duration_secs != null) lines.push(`durasi: ${fmtDuration(e.duration_secs)}`);
+    if (e.app_version) lines.push(`versi: ${e.app_version}`);
+    if (e.os) lines.push(`os: ${e.os}`);
+    lines.push(`subtitle: ${e.subtitles ? "ya" : "tidak"}`);
+    if (e.failed_stage) lines.push(`tahap gagal: ${e.failed_stage}`);
+    for (const s of e.stages ?? []) {
+      const t = s.state === "pending" ? "-" : fmtDuration(s.elapsed_secs);
+      lines.push(`  [${s.state}] ${s.label} (${t})${s.detail ? ` — ${s.detail}` : ""}`);
+    }
+    if (e.output_path) lines.push(`output: ${e.output_path}`);
+    if (e.error) lines.push("", "error:", e.error);
+    return lines.join("\n");
+  }
+
+  async function copyReport(e: LogEntry) {
+    try {
+      await navigator.clipboard.writeText(reportText(e));
+      copied = entryKey(e);
+      setTimeout(() => (copied = null), 1500);
+    } catch {
+      /* clipboard can be unavailable; the text is still selectable below */
+    }
+  }
 
   onMount(() => {
     void batch.refreshLogs();
@@ -90,6 +132,13 @@
                   {/if}
                 </td>
                 <td style="text-align:right">
+                  {#if hasDetail(entry)}
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      onclick={() => (open[entryKey(entry)] = !open[entryKey(entry)])}
+                      type="button"
+                    >{open[entryKey(entry)] ? "Tutup" : "Detail"}</button>
+                  {/if}
                   {#if entry.success && entry.output_path}
                     <button class="btn btn-ghost btn-sm" onclick={() => openWithDefaultApp(entry.output_path!)} type="button">
                       Preview
@@ -100,6 +149,34 @@
                   {/if}
                 </td>
               </tr>
+              {#if open[entryKey(entry)]}
+                <tr class="detail-row">
+                  <td colspan="5">
+                    <div class="detail">
+                      <dl class="meta">
+                        {#if entry.source_path}<dt>File</dt><dd class="mono">{entry.source_path}</dd>{/if}
+                        {#if entry.duration_secs != null}<dt>Durasi</dt><dd>{fmtDuration(entry.duration_secs)}</dd>{/if}
+                        {#if entry.failed_stage}<dt>Tahap gagal</dt><dd class="neg">{entry.failed_stage}</dd>{/if}
+                        {#if entry.output_path}<dt>Output</dt><dd class="mono">{entry.output_path}</dd>{/if}
+                        {#if entry.app_version || entry.os}
+                          <dt>Versi</dt><dd class="mono">{entry.app_version ?? "?"} · {entry.os ?? "?"}</dd>
+                        {/if}
+                      </dl>
+                      {#if entry.stages?.length}
+                        <StageList stages={entry.stages} />
+                      {/if}
+                      {#if entry.error}
+                        <pre class="err mono">{entry.error}</pre>
+                      {/if}
+                      <div class="detail-actions">
+                        <button class="btn btn-ghost btn-sm" onclick={() => copyReport(entry)} type="button">
+                          {copied === entryKey(entry) ? "Tersalin ✓" : "Salin Laporan"}
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>
@@ -163,6 +240,53 @@
     border-radius: var(--radius);
     color: var(--neg);
     font-size: 12px;
+  }
+
+  .detail-row td {
+    background: var(--surface-2);
+  }
+  .detail {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 6px 4px;
+    text-align: left;
+  }
+  .meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 3px 12px;
+    margin: 0;
+    font-size: 11.5px;
+  }
+  .meta dt {
+    color: var(--muted-2);
+  }
+  .meta dd {
+    margin: 0;
+    word-break: break-all;
+    user-select: text;
+  }
+  .meta .neg {
+    color: var(--neg);
+  }
+  .err {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 10.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 260px;
+    overflow: auto;
+    color: var(--neg);
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    user-select: text;
+  }
+  .detail-actions {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .table-card {
