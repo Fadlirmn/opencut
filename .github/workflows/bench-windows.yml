@@ -5,6 +5,10 @@ name: Bench Windows whisper
 # compared against the Linux build on the same machine.
 on:
   workflow_dispatch:
+    inputs:
+      cl:
+        description: 'CL env for cl.exe (empty = unoptimized baseline)'
+        default: '-O2'
 
 jobs:
   bench:
@@ -18,7 +22,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-ggml-msvc-cl-o2
+          prefix-key: v3-ggml-msvc-cl${{ inputs.cl }}
           workspaces: src-tauri
 
       - name: Build bench example
@@ -29,7 +33,7 @@ jobs:
           # with no optimization (~9x slower than Linux). CL is read by cl.exe
           # itself, bypassing cmake-rs. Dash form: Git Bash rewrites "/O2"
           # into a path.
-          CL: '-O2'
+          CL: ${{ inputs.cl }}
           AUTOCUT_STUB_SIDECARS: '1'
         working-directory: src-tauri
         shell: bash
