@@ -75,7 +75,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-        prefix-key: v1-ggml-portable
+          prefix-key: v1-ggml-portable
           workspaces: src-tauri
           # Debug artifacts from CI would be dead weight and can't be reused by
           # an optimized build anyway.

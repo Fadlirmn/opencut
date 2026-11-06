@@ -32,7 +32,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-        prefix-key: v1-ggml-portable
+          prefix-key: v1-ggml-portable
           workspaces: src-tauri
 
       - name: Install JS dependencies
