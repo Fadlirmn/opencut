@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::cutlist::CutList;
 use crate::sync::lock;
@@ -130,6 +130,16 @@ pub fn export(
 
     let crf = options.quality.crf().to_string();
 
+    // Relative paths would resolve against the ffmpeg working directory,
+    // which is moved to the subtitle's folder below; pin the output first.
+    let output = if output.is_relative() {
+        std::env::current_dir()
+            .context("resolving output path")?
+            .join(output)
+    } else {
+        output.to_path_buf()
+    };
+
     let mut cmd = Command::new(ffmpeg);
     cmd.args([
         "-y",
@@ -152,7 +162,9 @@ pub fn export(
     // single filter graph, not one flag per filter.
     let mut filters: Vec<String> = Vec::new();
     if let Some(path) = &subtitle_path {
-        filters.push(format!("ass={}", escape_filter_path(path)));
+        let (dir, filter) = subtitle_filter(path)?;
+        cmd.current_dir(dir);
+        filters.push(filter);
     }
     if let Some(h) = options.resolution.target_height() {
         filters.push(format!("scale=-2:{h}"));
@@ -165,7 +177,7 @@ pub fn export(
     } else {
         cmd.arg("-an");
     }
-    cmd.arg(output);
+    cmd.arg(&output);
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("spawning ffmpeg for export")?;
@@ -318,16 +330,32 @@ fn subtitle_temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("autocut-subs-{}-{}.ass", std::process::id(), id))
 }
 
-/// Escape a path for use inside an ffmpeg filter argument (e.g. `ass=<path>`).
-/// ffmpeg's filter-graph parser treats `:`, `\`, and `'` specially inside a
-/// filter's option string, so each needs its own backslash — on top of the
-/// backslashes Windows paths already contain. Without this, a Windows path
-/// like `C:\Users\...` or any path containing a `:` breaks filter parsing.
-fn escape_filter_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
+/// Build the `ass=` filter for a subtitle file, plus the directory ffmpeg
+/// must run in for it to resolve.
+///
+/// The filter gets the bare file name, never the full path. A Windows path
+/// like `C:\Users\...\Temp\x.ass` goes through two rounds of ffmpeg
+/// unescaping (filtergraph, then the filter's own option parser), and the
+/// drive-letter `:` ends up read as an option separator, so `ass` tries to
+/// open a file called `C`. Running ffmpeg from the subtitle's folder and
+/// naming only the file sidesteps escaping entirely. The temp name is
+/// `autocut-subs-<pid>-<n>.ass`, which has no characters ffmpeg treats
+/// specially.
+fn subtitle_filter(path: &Path) -> Result<(PathBuf, String)> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("subtitle path has no parent: {}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("subtitle path has no file name: {}", path.display()))?;
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        bail!("subtitle file name needs no escaping but got {name:?}");
+    }
+    Ok((dir.to_path_buf(), format!("ass={name}")))
 }
 
 #[cfg(test)]
@@ -405,6 +433,21 @@ mod tests {
         let list = build_concat_list(Path::new(r"C:\Users\me\my video.mp4"), &cl);
         // Backslashes are literal inside single quotes; nothing should escape them.
         assert!(list.contains(r"file 'C:\Users\me\my video.mp4'"), "{list}");
+    }
+
+    #[test]
+    fn subtitle_filter_uses_bare_name_for_windows_temp_path() {
+        let path = PathBuf::from(r"C:\Users\me\AppData\Local\Temp").join("autocut-subs-1-0.ass");
+        let (dir, filter) = subtitle_filter(&path).unwrap();
+        assert_eq!(filter, "ass=autocut-subs-1-0.ass");
+        assert_eq!(dir, PathBuf::from(r"C:\Users\me\AppData\Local\Temp"));
+        assert!(!filter.contains('\\'));
+    }
+
+    #[test]
+    fn subtitle_temp_name_needs_no_escaping() {
+        let (_, filter) = subtitle_filter(&subtitle_temp_path()).unwrap();
+        assert!(filter.starts_with("ass=autocut-subs-"), "{filter}");
     }
 
     #[test]
