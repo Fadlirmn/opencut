@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-14 is arm64, so the host target is aarch64-apple-darwin and
+          # macos-15 is arm64, so the host target is aarch64-apple-darwin and
           # Tauri names the disk image autocut_<version>_aarch64.dmg. That
           # exact name is what the Homebrew cask URL interpolates.
-          - os: macos-14
+          - os: macos-15
             artifact: autocut-macos-aarch64
             bundles: |
               src-tauri/target/release/bundle/dmg/*.dmg
