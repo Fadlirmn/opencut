@@ -30,6 +30,9 @@ jobs:
         # Full log goes to a file; only the SIMD/build-type lines are echoed.
         # (Piping cargo into a truncating filter kills it before it finishes.)
         run: |
+          # tauri::generate_context! needs frontendDist to exist; the bench
+          # never shows a window, so an empty placeholder is enough.
+          mkdir -p ../dist && echo '<!doctype html>' > ../dist/index.html
           cargo build --release --example bench_whisper -vv > build.log 2>&1
           status=$?
           grep -aoE "/arch:[A-Z0-9.]+|GGML_(AVX|AVX2|FMA|F16C|NATIVE|AVX512)[A-Z_]*[:=][A-Z]+|CMAKE_BUILD_TYPE[:=][A-Za-z]+|-- CMAKE_C_COMPILER_ID[^\r]*|Finished[^\r]*" build.log | sort | uniq -c
