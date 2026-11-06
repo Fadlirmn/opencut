@@ -6,6 +6,7 @@ pub mod export_fcpxml;
 pub mod export_mp4;
 pub mod llm;
 pub mod logstore;
+pub mod model;
 pub mod oauth;
 pub mod probe;
 pub mod queue;
@@ -77,6 +78,9 @@ pub fn run() {
             commands::llm_set_api_key,
             commands::llm_list_models,
             commands::llm_test,
+            commands::model_status,
+            commands::download_model,
+            commands::cancel_model_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running autocut");

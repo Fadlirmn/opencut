@@ -56,9 +56,7 @@ const TARGET_TRIPLE: &str = "x86_64-pc-windows-gnu";
 
 static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static FFPROBE_PATH: OnceLock<PathBuf> = OnceLock::new();
-static MODEL_PATH: OnceLock<PathBuf> = OnceLock::new();
-
-const WHISPER_MODEL_FILENAME: &str = "ggml-large-v3-turbo-q5_0.bin";
+use crate::model::MODEL_FILENAME as WHISPER_MODEL_FILENAME;
 
 fn ext() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -134,13 +132,35 @@ pub fn ffprobe_path(resource_dir: Option<&Path>) -> Result<PathBuf> {
     cached_binary_path(&FFPROBE_PATH, Tool::Ffprobe, resource_dir).context("resolving ffprobe")
 }
 
-/// Resolve the bundled Whisper model, mirroring [`binary_path`]'s candidate
-/// order. Unlike ffmpeg/ffprobe this isn't a sidecar `externalBin` (it's not
-/// executable), so it's shipped via `tauri.conf.json`'s `resources` list
-/// instead — but production still places it next to the running executable
-/// on macOS, the same place sidecars land, so that candidate stays first.
-fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+/// Resolve the Whisper model. It is no longer bundled (it would more than
+/// double the installer); the app downloads it on demand into
+/// `<app_data_dir>/models/` (see [`crate::model`]), so that location wins.
+/// The old bundled locations (next to the executable, under the resource
+/// dir, and the dev-build `src-tauri/models/`) stay as cheap fallbacks so an
+/// older install or a developer checkout that already has the file keeps
+/// working without a re-download.
+///
+/// Deliberately not cached: the answer changes the moment a download
+/// finishes, and a few stats per transcription cost nothing. Zero-length
+/// files are skipped (stubs from `AUTOCUT_STUB_MODEL` builds), since whisper
+/// cannot load them.
+pub fn model_path(app_data_dir: &Path, resource_dir: Option<&Path>) -> Result<PathBuf> {
+    let candidates = model_candidates(app_data_dir, resource_dir);
+    if let Some(found) = candidates.iter().find(|c| crate::model::is_usable(c)) {
+        return Ok(found.clone());
+    }
+    let attempted = candidates
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(anyhow!(
+        "model whisper belum diunduh (dicari di: {attempted})"
+    ))
+}
+
+fn model_candidates(app_data_dir: &Path, resource_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = vec![crate::model::downloaded_model_path(app_data_dir)];
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -148,12 +168,9 @@ fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
         }
     }
     if let Some(rd) = resource_dir {
-        // tauri.conf.json ships the model as a `resources` entry with a
-        // `models/` subpath ("models/ggml-large-v3-turbo-q5_0.bin"), and Tauri
-        // preserves that relative path under resource_dir — unlike
-        // `externalBin` sidecars (ffmpeg/ffprobe), which always land flat.
-        // The flat candidate stays as a harmless fallback in case that
-        // config path ever changes.
+        // Where installers up to 0.0.9 placed the bundled model: Tauri keeps
+        // a `resources` entry's relative `models/` subpath under
+        // resource_dir. The flat candidate is a harmless extra fallback.
         candidates.push(rd.join("models").join(WHISPER_MODEL_FILENAME));
         candidates.push(rd.join(WHISPER_MODEL_FILENAME));
     }
@@ -162,28 +179,25 @@ fn model_path_uncached(resource_dir: Option<&Path>) -> Result<PathBuf> {
             .join("models")
             .join(WHISPER_MODEL_FILENAME),
     );
-
-    for c in &candidates {
-        if c.exists() {
-            return Ok(c.clone());
-        }
-    }
-
-    let attempted = candidates
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(anyhow!(
-        "could not locate whisper model. tried: {attempted}"
-    ))
+    candidates
 }
 
-pub fn model_path(resource_dir: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = MODEL_PATH.get() {
-        return Ok(path.clone());
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloaded_model_is_preferred() {
+        let dir = std::env::temp_dir().join(format!(
+            "autocut-binaries-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let downloaded = crate::model::downloaded_model_path(&dir);
+        assert_eq!(model_candidates(&dir, None)[0], downloaded);
+        std::fs::create_dir_all(downloaded.parent().unwrap()).unwrap();
+        std::fs::write(&downloaded, b"model").unwrap();
+        assert_eq!(model_path(&dir, None).unwrap(), downloaded);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
-    let path = model_path_uncached(resource_dir).context("resolving whisper model")?;
-    let _ = MODEL_PATH.set(path.clone());
-    Ok(path)
 }

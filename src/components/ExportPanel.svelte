@@ -3,6 +3,7 @@
   import { diagnosticInfo, revealInFinder } from "../lib/api";
   import { editor } from "../lib/store.svelte";
   import type { ExportQuality, ExportResolution } from "../lib/types";
+  import ModelDownloadPrompt from "./ModelDownloadPrompt.svelte";
 
   async function addTrack() {
     const picked = await open({
@@ -52,7 +53,22 @@
       defaultPath: suggestedName("mp4"),
       filters: [{ name: "MP4", extensions: ["mp4"] }],
     });
-    if (out) editor.exportMp4(out);
+    if (!out) return;
+    pendingMp4 = out;
+    await editor.exportMp4(out);
+    if (!editor.modelNeeded) pendingMp4 = null;
+  }
+
+  /// The output path the user already picked before being told the whisper
+  /// model was missing, so the export carries on once it has downloaded
+  /// instead of asking for the path again.
+  let pendingMp4: string | null = null;
+
+  function resumeMp4Export() {
+    const out = pendingMp4;
+    pendingMp4 = null;
+    if (out) void editor.exportMp4(out);
+    else editor.modelNeeded = false;
   }
 
   async function exportFcpxml() {
@@ -264,6 +280,13 @@
         <span class="mono">▸</span> fcpxml
       </button>
     </div>
+
+    {#if editor.modelNeeded && editor.burnSubtitles}
+      <ModelDownloadPrompt
+        onready={resumeMp4Export}
+        ondismiss={() => (editor.modelNeeded = false)}
+      />
+    {/if}
 
     <p class="hint muted-2">
       {#if editor.linkedTracks.length}

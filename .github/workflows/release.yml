@@ -103,10 +103,10 @@ jobs:
           fi
           echo "releasing $pkg"
 
-      # No AUTOCUT_STUB_SIDECARS/AUTOCUT_STUB_MODEL here, deliberately:
-      # build.rs downloads the real ffmpeg/ffprobe pair and whisper model,
-      # and a bundle built with stubs would install cleanly and then fail on
-      # the first video. Linux passes --bundles explicitly to skip rpm
+      # No AUTOCUT_STUB_SIDECARS here, deliberately: build.rs downloads the
+      # real ffmpeg/ffprobe pair, and a bundle built with stubs would install
+      # cleanly and then fail on the first video. The whisper model is not
+      # bundled; the app downloads it on demand. Linux passes --bundles explicitly to skip rpm
       # (no rpmbuild on the runner); macOS/Windows build their defaults.
       - name: Tauri build
         env:

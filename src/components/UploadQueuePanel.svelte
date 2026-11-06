@@ -4,6 +4,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { batch } from "../lib/batch.svelte";
   import { openWithDefaultApp } from "../lib/api";
+  import ModelDownloadPrompt from "./ModelDownloadPrompt.svelte";
 
   const VIDEO_RE = /\.(mp4|mov|m4v|mkv|webm|avi)$/i;
 
@@ -141,6 +142,18 @@
         type="button"
       >{starting ? "Memulai…" : "Proses Semua"}</button>
     </footer>
+    {#if batch.modelNeeded}
+      <div class="queue-notice">
+        <ModelDownloadPrompt
+          onready={startQueue}
+          ondismiss={() => (batch.modelNeeded = false)}
+        />
+      </div>
+    {:else if batch.startError}
+      <div class="queue-notice">
+        <p class="start-error mono">{batch.startError}</p>
+      </div>
+    {/if}
   </section>
 
   <section class="card queue-card" class:collapsed={!doneOpen}>
@@ -412,6 +425,20 @@
   .icon-btn:hover {
     color: var(--neg);
     border-color: hsl(0 84% 65% / 0.4);
+  }
+
+  .queue-notice {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .queue-card.collapsed .queue-notice {
+    display: none;
+  }
+  .start-error {
+    margin: 0;
+    font-size: 11px;
+    color: var(--neg);
+    word-break: break-word;
   }
 
   .queue-foot {

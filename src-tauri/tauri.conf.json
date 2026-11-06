@@ -36,9 +36,6 @@
       "binaries/ffmpeg",
       "binaries/ffprobe"
     ],
-    "resources": [
-      "models/ggml-large-v3-turbo-q5_0.bin"
-    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

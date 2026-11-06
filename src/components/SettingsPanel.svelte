@@ -2,11 +2,14 @@
   import { onMount } from "svelte";
   import { batch } from "../lib/batch.svelte";
   import { llmListModels } from "../lib/api";
+  import { whisperModel } from "../lib/store.svelte";
   import type { ExportQuality, ExportResolution } from "../lib/types";
+  import ModelDownloadPrompt from "./ModelDownloadPrompt.svelte";
 
   onMount(() => {
     void batch.refreshSettings();
     void batch.refreshLlmStatus();
+    void whisperModel.refresh();
   });
 
   const qualityOptions: { value: ExportQuality; label: string }[] = [
@@ -111,6 +114,10 @@
             <span></span>
           </label>
         </div>
+
+        {#if s.burn_subtitles && whisperModel.status && !whisperModel.present}
+          <ModelDownloadPrompt />
+        {/if}
 
         <div class="divider"></div>
 

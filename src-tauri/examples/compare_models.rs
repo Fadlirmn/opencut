@@ -8,7 +8,8 @@
 //! Usage:
 //!   cargo run --example compare_models -- <video> [--model PATH ...] [--denoise]
 //!
-//! With no `--model`, compares against only the bundled model. Pass
+//! With no `--model`, compares against only the default model (looked up in
+//! `src-tauri/models/`). Pass
 //! `--model` once per extra model file (e.g. a manually downloaded
 //! ggml-large-v3.bin) to compare it against the bundled one in the same run.
 //! `--denoise` additionally extracts a second, denoised PCM track and runs
@@ -52,7 +53,13 @@ fn run() -> anyhow::Result<()> {
     })?;
 
     if models.is_empty() {
-        models.push(binaries::model_path(None)?);
+        // No Tauri app handle here, so no app-data dir: this finds the model
+        // only at the dev fallback (src-tauri/models/). Pass --model for a
+        // copy the app downloaded into its app-data folder.
+        models.push(binaries::model_path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            None,
+        )?);
     }
 
     let ffmpeg = binaries::ffmpeg_path(None)?;
