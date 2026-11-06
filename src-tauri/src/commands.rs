@@ -13,7 +13,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::audio::extract_pcm_with_cancel;
+use crate::audio::{extract_pcm_with_cancel, VAD_SAMPLE_RATE};
 use crate::binaries::{ffmpeg_path, ffprobe_path, model_path};
 use crate::cutlist::CutList;
 use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams, Track};
@@ -27,7 +27,7 @@ use crate::settings::{self, AppSettings};
 use crate::subtitle::{render_ass, render_srt, SubtitleStyle, VideoSize};
 use crate::sync::lock;
 use crate::timecode::parse_smpte;
-use crate::timeline::map_to_output;
+use crate::timeline::{map_to_output, SpeechTrack};
 use crate::transcribe::transcribe;
 use crate::vad::{score_chunks, segments_from_scores, VadParams};
 use crate::waveform::waveform_from_samples;
@@ -446,8 +446,11 @@ pub async fn generate_subtitles(
 
     let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let samples = cache.samples(&ffmpeg, &source, cancel_for_worker.clone())?;
-        let segments =
-            transcribe(&model, &samples, cancel_for_worker.clone(), |_| {}).map_err(fmt_err)?;
+        let speech = SpeechTrack::build(&samples, VAD_SAMPLE_RATE, &cutlist);
+        let segments = speech.segments_to_source(
+            &transcribe(&model, &speech.samples, cancel_for_worker.clone(), |_| {})
+                .map_err(fmt_err)?,
+        );
         let output_segments = map_to_output(&cutlist, &segments);
         let style = SubtitleStyle::default();
         Ok(match format {

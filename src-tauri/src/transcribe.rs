@@ -45,11 +45,12 @@ pub fn transcribe(
     // streamed, so this briefly costs an extra samples.len() * 4 bytes.
     let pcm: Vec<f32> = samples.iter().copied().map(to_unit).collect();
 
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 5 });
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get() as i32)
-        .unwrap_or(4);
-    params.set_n_threads(threads);
+    // best_of only applies when whisper falls back to sampling at a higher
+    // temperature after a low-confidence window; 2 keeps that fallback but
+    // halves-plus its cost versus 5. The first (greedy, t=0) pass is
+    // unaffected.
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 2 });
+    params.set_n_threads(whisper_threads());
     params.set_language(Some(LANGUAGE));
     params.set_translate(false);
     params.set_detect_language(false);
@@ -123,6 +124,66 @@ unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool 
     flag.load(Ordering::SeqCst)
 }
 
+/// One thread per physical core. ggml's matrix kernels saturate a core's
+/// SIMD units, so a hyperthread sibling adds contention rather than speed, and
+/// every worker waiting on the slowest one makes oversubscription worse.
+/// Assumes 2-way SMT when there is more than 4 logical CPUs; leaves small
+/// machines alone.
+fn whisper_threads() -> i32 {
+    if let Some(n) = std::env::var("AUTOCUT_WHISPER_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|n| *n > 0)
+    {
+        return n;
+    }
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    physical_cores(logical) as i32
+}
+
+fn physical_cores(logical: usize) -> usize {
+    if let Some(n) = physical_cores_from_os() {
+        return n.clamp(1, logical);
+    }
+    if logical > 4 {
+        logical / 2
+    } else {
+        logical
+    }
+}
+
+/// Count distinct (package, core) pairs on Linux. Elsewhere returns None and
+/// the caller falls back to the SMT heuristic.
+fn physical_cores_from_os() -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut pkg, mut core) = (None, None);
+        for line in info.lines().chain(std::iter::once("")) {
+            if line.trim().is_empty() {
+                if let (Some(p), Some(c)) = (pkg.take(), core.take()) {
+                    seen.insert((p, c));
+                }
+                continue;
+            }
+            let (k, v) = line.split_once(':')?;
+            match k.trim() {
+                "physical id" => pkg = v.trim().parse::<u32>().ok(),
+                "core id" => core = v.trim().parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        (!seen.is_empty()).then_some(seen.len())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 fn is_cancelled(flag: &AtomicBool) -> bool {
     flag.load(Ordering::SeqCst)
 }
@@ -143,6 +204,14 @@ fn segment_to_timed_text(start_cs: i64, end_cs: i64, text: &str) -> Option<Timed
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_count_is_sane() {
+        let n = whisper_threads();
+        let logical = std::thread::available_parallelism().unwrap().get() as i32;
+        assert!(n >= 1 && n <= logical, "{n} of {logical}");
+        assert_eq!(physical_cores(1), 1);
+    }
 
     #[test]
     fn centiseconds_convert_to_seconds() {

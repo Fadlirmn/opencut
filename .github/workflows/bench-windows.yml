@@ -1,0 +1,36 @@
+name: Bench Windows whisper
+
+# Builds only the whisper benchmark example with the exact toolchain and
+# flags of the Windows release (MSVC, GGML_NATIVE=OFF), so its speed can be
+# compared against the Linux build on the same machine.
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-ggml-portable
+          workspaces: src-tauri
+
+      - name: Build bench example
+        env:
+          GGML_NATIVE: 'OFF'
+          AUTOCUT_STUB_SIDECARS: '1'
+        working-directory: src-tauri
+        run: cargo build --release --example bench_whisper -vv 2>&1 | Select-String -Pattern "arch:|GGML_AVX|GGML_NATIVE|CMAKE_BUILD_TYPE|Finished|error" | Select-Object -First 60
+
+      - name: Upload bench exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-whisper-windows
+          path: src-tauri/target/release/examples/bench_whisper.exe
+          if-no-files-found: error

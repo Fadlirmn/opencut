@@ -99,6 +99,87 @@ fn keep_start_of(keeps: &[(f64, f64, f64)], t: f64) -> f64 {
         .unwrap_or(t)
 }
 
+/// Silence inserted between kept pieces when they are joined for
+/// transcription, so whisper sees a pause instead of two words glued together.
+pub const SPEECH_GAP_SECONDS: f64 = 0.3;
+
+/// Audio built from only the kept parts of a track, plus the map back to
+/// source time. Transcribing this instead of the whole file skips every
+/// stretch the export is going to cut anyway.
+pub struct SpeechTrack {
+    pub samples: Vec<i16>,
+    /// `(track_start, source_start, len)` in seconds, one per kept piece, in
+    /// order. Gaps between pieces belong to no piece.
+    pieces: Vec<(f64, f64, f64)>,
+}
+
+impl SpeechTrack {
+    /// Concatenate the kept intervals of `cutlist` out of `samples` (mono PCM
+    /// at `rate` Hz), with `SPEECH_GAP_SECONDS` of silence between them.
+    pub fn build(samples: &[i16], rate: u32, cutlist: &CutList) -> Self {
+        let rate_f = rate as f64;
+        let gap = (SPEECH_GAP_SECONDS * rate_f).round() as usize;
+        let mut out = Vec::new();
+        let mut pieces = Vec::new();
+        for cut in cutlist.intervals.iter().filter(|c| c.kind == CutKind::Keep) {
+            let a = ((cut.start.max(0.0) * rate_f).round() as usize).min(samples.len());
+            let b = ((cut.end.max(0.0) * rate_f).round() as usize).min(samples.len());
+            if b <= a {
+                continue;
+            }
+            if !out.is_empty() {
+                out.resize(out.len() + gap, 0);
+            }
+            pieces.push((
+                out.len() as f64 / rate_f,
+                a as f64 / rate_f,
+                (b - a) as f64 / rate_f,
+            ));
+            out.extend_from_slice(&samples[a..b]);
+        }
+        Self {
+            samples: out,
+            pieces,
+        }
+    }
+
+    pub fn duration(&self) -> f64 {
+        self.pieces
+            .last()
+            .map_or(0.0, |(start, _, len)| start + len)
+    }
+
+    /// Source time for a time on this track. A time inside a gap snaps to the
+    /// edge of the piece it belongs to: a start snaps forward to the next
+    /// piece, an end snaps back to the previous one.
+    fn to_source(&self, t: f64, is_end: bool) -> f64 {
+        let mut prev_end: Option<f64> = None;
+        for &(start, src, len) in &self.pieces {
+            if t < start {
+                return if is_end { prev_end.unwrap_or(src) } else { src };
+            }
+            if t <= start + len {
+                return src + (t - start);
+            }
+            prev_end = Some(src + len);
+        }
+        prev_end.unwrap_or(t)
+    }
+
+    /// Re-base segments transcribed from this track onto source time. A
+    /// segment that collapses to nothing (entirely inside a gap) is dropped.
+    pub fn segments_to_source(&self, segments: &[TimedText]) -> Vec<TimedText> {
+        segments
+            .iter()
+            .filter_map(|s| {
+                let start = self.to_source(s.start, false);
+                let end = self.to_source(s.end, true);
+                (end > start).then(|| TimedText::new(start, end, s.text.clone()))
+            })
+            .collect()
+    }
+}
+
 /// Kept windows with their cumulative output offset.
 fn keep_windows(cutlist: &CutList) -> Vec<(f64, f64, f64)> {
     let mut out = Vec::new();
@@ -172,6 +253,84 @@ fn split_text(text: &str, parts: &[(f64, f64)]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cutlist::Cut;
+
+    #[test]
+    fn speech_track_keeps_only_kept_audio_with_gaps() {
+        // 10 Hz "audio" so seconds map to 10 samples; value = sample index.
+        let samples: Vec<i16> = (0..100).collect();
+        let cl = cutlist(
+            &[
+                (0.0, 1.0, CutKind::Remove),
+                (1.0, 3.0, CutKind::Keep),
+                (3.0, 6.0, CutKind::Remove),
+                (6.0, 7.0, CutKind::Keep),
+                (7.0, 10.0, CutKind::Remove),
+            ],
+            10.0,
+        );
+        let track = SpeechTrack::build(&samples, 10, &cl);
+        // 20 + 3 gap + 10
+        assert_eq!(track.samples.len(), 33);
+        assert_eq!(track.samples[0], 10);
+        assert_eq!(&track.samples[20..23], &[0, 0, 0]);
+        assert_eq!(track.samples[23], 60);
+        assert!((track.duration() - 3.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn speech_track_maps_times_back_to_source() {
+        let samples = vec![0i16; 100];
+        let cl = cutlist(
+            &[
+                (1.0, 3.0, CutKind::Keep),
+                (3.0, 6.0, CutKind::Remove),
+                (6.0, 7.0, CutKind::Keep),
+            ],
+            10.0,
+        );
+        let track = SpeechTrack::build(&samples, 10, &cl);
+        let back = track.segments_to_source(&[
+            TimedText::new(0.5, 1.5, "a"),
+            // starts in piece 1, ends in piece 2
+            TimedText::new(1.8, 2.8, "b"),
+            // entirely in the gap
+            TimedText::new(2.05, 2.25, "c"),
+        ]);
+        assert_eq!(back.len(), 2);
+        assert!((back[0].start - 1.5).abs() < 1e-9);
+        assert!((back[0].end - 2.5).abs() < 1e-9);
+        assert!((back[1].start - 2.8).abs() < 1e-9);
+        assert!((back[1].end - 6.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn speech_track_round_trips_through_output_mapping() {
+        // A line spoken inside a kept piece must land at the same output
+        // time whether whisper saw the full track or the speech-only one.
+        let samples = vec![0i16; 100];
+        let cl = cutlist(
+            &[
+                (0.0, 2.0, CutKind::Remove),
+                (2.0, 4.0, CutKind::Keep),
+                (4.0, 8.0, CutKind::Remove),
+                (8.0, 10.0, CutKind::Keep),
+            ],
+            10.0,
+        );
+        let track = SpeechTrack::build(&samples, 10, &cl);
+        // "halo" at source 8.5-9.5 sits at track 2.3+0.5 = 2.8-3.8.
+        let src = track.segments_to_source(&[TimedText::new(2.8, 3.8, "halo")]);
+        let direct = map_to_output(&cl, &[TimedText::new(8.5, 9.5, "halo")]);
+        assert_eq!(map_to_output(&cl, &src), direct);
+    }
+
+    #[test]
+    fn empty_cutlist_gives_empty_track() {
+        let cl = cutlist(&[(0.0, 10.0, CutKind::Remove)], 10.0);
+        let track = SpeechTrack::build(&[0i16; 100], 10, &cl);
+        assert!(track.samples.is_empty());
+        assert_eq!(track.duration(), 0.0);
+    }
 
     fn cutlist(intervals: &[(f64, f64, CutKind)], duration: f64) -> CutList {
         CutList {

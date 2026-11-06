@@ -16,7 +16,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::audio::extract_pcm_with_progress;
+use crate::audio::{extract_pcm_with_progress, VAD_SAMPLE_RATE};
 use crate::cutlist::CutList;
 use crate::export_mp4::{self, ExportOptions};
 use crate::llm::rewrite_transcript;
@@ -26,7 +26,7 @@ use crate::progress::{fmt_clock, Progress, Stage, StageSpec};
 use crate::settings::AppSettings;
 use crate::subtitle::{render_ass, SubtitleStyle, VideoSize};
 use crate::sync::lock;
-use crate::timeline::map_to_output;
+use crate::timeline::{map_to_output, SpeechTrack};
 use crate::transcribe::transcribe;
 use crate::vad::{score_chunks_with_progress, segments_from_scores, VadParams};
 
@@ -415,18 +415,24 @@ fn process_one(
         progress.begin("transcribe");
         progress.update(0.0, "memuat model");
         let progress_for_whisper = progress.clone();
-        let raw_segments = transcribe(model, &samples, cancel.clone(), move |pct| {
+        // Only the parts the export keeps get transcribed; whisper never
+        // hears the silences that are about to be cut. Its timestamps are
+        // mapped back to source time so map_to_output below is unchanged.
+        let speech = SpeechTrack::build(&samples, VAD_SAMPLE_RATE, &cutlist);
+        let speech_total = speech.duration().max(0.001);
+        let track_segments = transcribe(model, &speech.samples, cancel.clone(), move |pct| {
             let pct = pct.clamp(0, 100) as f64;
             progress_for_whisper.update(
                 pct as f32,
                 format!(
-                    "audio {} / {}",
-                    fmt_clock(pct / 100.0 * total),
-                    fmt_clock(total)
+                    "ucapan {} / {}",
+                    fmt_clock(pct / 100.0 * speech_total),
+                    fmt_clock(speech_total)
                 ),
             );
         })
         .map_err(|e| anyhow!("{e:#}"))?;
+        let raw_segments = speech.segments_to_source(&track_segments);
         progress.set_detail("transcribe", format!("{} segmen teks", raw_segments.len()));
         let mut mapped = map_to_output(&cutlist, &raw_segments);
 
