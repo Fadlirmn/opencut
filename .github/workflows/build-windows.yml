@@ -32,12 +32,18 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
+        prefix-key: v1-ggml-portable
           workspaces: src-tauri
 
       - name: Install JS dependencies
         run: pnpm install --no-frozen-lockfile
 
       - name: Tauri build
+        env:
+          # ggml defaults to -march=native, which bakes the CI runner's AVX-512
+          # into the binary and crashes with SIGILL on ordinary laptops. OFF
+          # pins a portable AVX2/FMA/F16C baseline instead.
+          GGML_NATIVE: 'OFF'
         run: node_modules/.bin/tauri build
         shell: bash
 
