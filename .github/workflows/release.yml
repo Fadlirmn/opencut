@@ -78,7 +78,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v2-ggml-msvc-o2
+          prefix-key: v3-ggml-msvc-cl-o2
           workspaces: src-tauri
           # Debug artifacts from CI would be dead weight and can't be reused by
           # an optimized build anyway.
@@ -118,11 +118,12 @@ jobs:
           # into the binary and crashes with SIGILL on ordinary laptops. OFF
           # pins a portable AVX2/FMA/F16C baseline instead.
           GGML_NATIVE: 'OFF'
-          # cmake-rs hands MSVC its own CMAKE_C_FLAGS_RELEASE with no /O2, so
-          # ggml/whisper.cpp would be compiled unoptimized (~9x slower than
-          # the Linux build). The target-scoped vars reach only MSVC builds.
-          CFLAGS_x86_64_pc_windows_msvc: '-O2'
-          CXXFLAGS_x86_64_pc_windows_msvc: '-O2'
+          # cmake-rs (0.1.58) overrides CMAKE_C_FLAGS_RELEASE for MSVC and
+          # strips every -O/ /O flag from CFLAGS, so ggml/whisper.cpp was built
+          # with no optimization (~9x slower than Linux). CL is read by cl.exe
+          # itself, bypassing cmake-rs. Dash form: Git Bash rewrites "/O2"
+          # into a path.
+          CL: '-O2'
         run: |
           if [ -n "${{ matrix.bundleTargets }}" ]; then
             node_modules/.bin/tauri build --bundles ${{ matrix.bundleTargets }}

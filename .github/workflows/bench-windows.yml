@@ -18,17 +18,18 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v2-ggml-msvc-o2
+          prefix-key: v3-ggml-msvc-cl-o2
           workspaces: src-tauri
 
       - name: Build bench example
         env:
           GGML_NATIVE: 'OFF'
-          # cmake-rs hands MSVC its own CMAKE_C_FLAGS_RELEASE with no /O2, so
-          # ggml/whisper.cpp would be compiled unoptimized (~9x slower than
-          # the Linux build). The target-scoped vars reach only MSVC builds.
-          CFLAGS_x86_64_pc_windows_msvc: '-O2'
-          CXXFLAGS_x86_64_pc_windows_msvc: '-O2'
+          # cmake-rs (0.1.58) overrides CMAKE_C_FLAGS_RELEASE for MSVC and
+          # strips every -O/ /O flag from CFLAGS, so ggml/whisper.cpp was built
+          # with no optimization (~9x slower than Linux). CL is read by cl.exe
+          # itself, bypassing cmake-rs. Dash form: Git Bash rewrites "/O2"
+          # into a path.
+          CL: '-O2'
           AUTOCUT_STUB_SIDECARS: '1'
         working-directory: src-tauri
         shell: bash
@@ -42,6 +43,18 @@ jobs:
           status=$?
           grep -aoE "/arch:[A-Z0-9.]+|GGML_(AVX|AVX2|FMA|F16C|NATIVE|AVX512)[A-Z_]*[:=][A-Z]+|CMAKE_BUILD_TYPE[:=][A-Za-z]+|-- CMAKE_C_COMPILER_ID[^\r]*|Finished[^\r]*" build.log | sort | uniq -c
           exit $status
+
+      # Run the bench on a synthetic 20s clip with the real app model. The
+      # time only matters relative to a build without -O2 (several x slower).
+      # cl.exe reads CL itself, so -O2 never shows on the logged compile line;
+      # this timing is the evidence that it took effect.
+      - name: Run bench
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          curl -sSL -o model.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+          python -c "import math,struct,sys; sys.stdout.buffer.write(b''.join(struct.pack('<h', int(8000*math.sin(2*math.pi*440*i/16000))) for i in range(16000*20)))" > audio.s16le
+          ./target/release/examples/bench_whisper.exe audio.s16le model.bin
 
       - name: Upload build log
         if: always()
