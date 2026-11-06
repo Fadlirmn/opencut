@@ -121,8 +121,8 @@ jobs:
           # cmake-rs hands MSVC its own CMAKE_C_FLAGS_RELEASE with no /O2, so
           # ggml/whisper.cpp would be compiled unoptimized (~9x slower than
           # the Linux build). The target-scoped vars reach only MSVC builds.
-          CFLAGS_x86_64_pc_windows_msvc: '/O2'
-          CXXFLAGS_x86_64_pc_windows_msvc: '/O2'
+          CFLAGS_x86_64_pc_windows_msvc: '-O2'
+          CXXFLAGS_x86_64_pc_windows_msvc: '-O2'
         run: |
           if [ -n "${{ matrix.bundleTargets }}" ]; then
             node_modules/.bin/tauri build --bundles ${{ matrix.bundleTargets }}
