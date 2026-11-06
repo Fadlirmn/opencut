@@ -21,10 +21,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # NSIS only: with tauri.conf.json's "all" this leg would also build
+          # an MSI, a second ~600MB installer of the same payload that doubles
+          # the artifact upload and the draft release for no user benefit.
           - os: windows-latest
             artifact: autocut-windows-x86_64
+            bundleTargets: nsis
             bundles: |
-              src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
           # rpmbuild isn't preinstalled on ubuntu-latest, so this skips the
           # rpm target rather than fail on it; dpkg-deb is already on the
@@ -107,7 +110,7 @@ jobs:
       # build.rs downloads the real ffmpeg/ffprobe pair and whisper model,
       # and a bundle built with stubs would install cleanly and then fail on
       # the first video. Linux passes --bundles explicitly to skip rpm
-      # (no rpmbuild on the runner); macOS/Windows build their defaults.
+      # (no rpmbuild on the runner); Windows passes it to build NSIS only.
       - name: Tauri build
         env:
           # ggml defaults to -march=native, which bakes the CI runner's AVX-512
@@ -147,10 +150,10 @@ jobs:
           merge-multiple: true
 
       # merge-multiple merges the artifact *names* into one directory but keeps
-      # each artifact's own internal layout. The Windows and Linux legs each
-      # declare two path patterns, so their installers arrive nested (e.g.
-      # artifacts/msi/*.msi and artifacts/nsis/*.exe), while the single-
-      # pattern macOS dmg lands flat. A plain artifacts/* therefore hands
+      # each artifact's own internal layout. The Linux leg declares two path
+      # patterns, so its installers arrive nested (artifacts/appimage/*.AppImage
+      # and artifacts/deb/*.deb), while the single-pattern Windows exe lands
+      # flat. A plain artifacts/* therefore hands
       # `gh release upload` a directory and it fails with "is a directory".
       # Flatten to files first.
       - name: Flatten
@@ -158,7 +161,7 @@ jobs:
           set -euo pipefail
           mkdir -p installers
           find artifacts -type f \
-            \( -name '*.msi' -o -name '*.exe' \
+            \( -name '*.exe' \
                -o -name '*.AppImage' -o -name '*.deb' \) \
             -exec mv -t installers {} +
           ls -la installers
@@ -193,7 +196,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for pattern in "*.msi" "*-setup.exe" "*.AppImage" "*.deb"; do
+          for pattern in "*-setup.exe" "*.AppImage" "*.deb"; do
             if ! compgen -G "installers/$pattern" > /dev/null; then
               missing="$missing $pattern"
             fi
@@ -202,4 +205,4 @@ jobs:
             echo "::error::draft $GITHUB_REF_NAME is incomplete, missing:$missing"
             exit 1
           fi
-          echo "all five installers present"
+          echo "all three installers present"

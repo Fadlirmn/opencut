@@ -49,7 +49,7 @@ Installing the `.dmg` from [the latest release][latest] by hand works too: drag
 once, or macOS calls the app damaged and refuses to open it. The bundle is not
 notarized yet, and that command is the whole difference between the two paths.
 
-**Windows, x86_64.** `autocut_X.Y.Z_x64-setup.exe` (NSIS) or the `.msi`, from
+**Windows, x86_64.** `autocut_X.Y.Z_x64-setup.exe` (NSIS installer) from
 [the latest release][latest]. Unsigned, so SmartScreen wants **More info**, then
 **Run anyway** on first launch.
 
