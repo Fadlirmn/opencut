@@ -7,13 +7,17 @@ import {
   cancelDetect as apiCancelDetect,
   cancelExport as apiCancelExport,
   cancelSubtitles as apiCancelSubtitles,
+  cancelModelDownload as apiCancelModelDownload,
   cancelWaveform as apiCancelWaveform,
   computeWaveform,
   detectSilence,
+  downloadModel as apiDownloadModel,
   exportFcpxml as apiExportFcpxml,
   exportMp4 as apiExportMp4,
   generateSubtitles as apiGenerateSubtitles,
+  modelStatus as apiModelStatus,
   onExportProgress,
+  onModelDownloadProgress as apiOnModelDownloadProgress,
   openTrack,
   openVideo,
 } from "./api";
@@ -31,6 +35,8 @@ import type {
   ExportOptions,
   LinkedTrack,
   MediaInfo,
+  ModelDownloadProgress,
+  ModelStatus,
 } from "./types";
 
 type JobStatus = "idle" | "detecting" | "exporting";
@@ -118,6 +124,9 @@ class EditorStore {
   /// subtitles first. Off by default — transcription costs real CPU time
   /// on top of the encode itself.
   burnSubtitles = $state(false);
+  /// Set when an mp4 export with subtitles was refused because the whisper
+  /// model isn't downloaded yet; ExportPanel shows the download prompt.
+  modelNeeded = $state(false);
   currentTime = $state(0);
   skipRemoved = $state(true);
   jobStatus = $state<JobStatus>("idle");
@@ -348,6 +357,14 @@ class EditorStore {
     if (!normalized) return;
     const source = this.video.path;
     this.lastExport = null;
+    // The model is downloaded on demand, not bundled. Without it whisper
+    // would fail deep inside transcription with a path error; stop here
+    // instead and let ExportPanel's download prompt take over.
+    if (this.burnSubtitles && !(await whisperModel.ensurePresent())) {
+      this.modelNeeded = true;
+      return;
+    }
+    this.modelNeeded = false;
     this.jobStatus = "exporting";
     this.exportProgress = { pct: 0, message: "starting" };
     this.exportError = null;
@@ -642,3 +659,86 @@ class EditorStore {
 }
 
 export const editor = new EditorStore();
+
+/// The whisper model is no longer bundled with the installer; it is
+/// downloaded on demand into the app-data folder. This store is shared by
+/// every place that can ask for subtitles (Settings, the batch queue, the
+/// single-video export panel) so a download started in one shows its
+/// progress in all of them.
+class WhisperModelStore {
+  status = $state<ModelStatus | null>(null);
+  downloading = $state(false);
+  progress = $state<ModelDownloadProgress | null>(null);
+  error = $state<string | null>(null);
+
+  /// True only once the backend has confirmed the file is on disk. Unknown
+  /// (status not loaded yet) counts as missing.
+  get present(): boolean {
+    return this.status?.present ?? false;
+  }
+
+  get sizeBytes(): number {
+    return this.status?.size_bytes ?? 0;
+  }
+
+  async refresh(): Promise<ModelStatus | null> {
+    try {
+      this.status = await apiModelStatus();
+    } catch (e) {
+      this.error = String(e);
+    }
+    return this.status;
+  }
+
+  /// Re-check the disk and report whether transcription can run right now.
+  async ensurePresent(): Promise<boolean> {
+    const s = await this.refresh();
+    return s?.present ?? false;
+  }
+
+  /// Download the model, streaming progress into `this.progress`. Resolves
+  /// true when the model is ready, false on cancel or failure (failure text
+  /// lands in `this.error`; a cancel is not an error).
+  async download(): Promise<boolean> {
+    if (this.downloading) return false;
+    this.downloading = true;
+    this.error = null;
+    this.progress = { downloaded: 0, total: this.sizeBytes };
+    let unlisten: (() => void) | null = null;
+    try {
+      unlisten = await apiOnModelDownloadProgress((p) => {
+        this.progress = p;
+      });
+      await apiDownloadModel();
+      await this.refresh();
+      return this.present;
+    } catch (e) {
+      if (!isModelCancelError(e)) {
+        this.error = String(e);
+      }
+      return false;
+    } finally {
+      unlisten?.();
+      this.downloading = false;
+      this.progress = null;
+    }
+  }
+
+  async cancel() {
+    await apiCancelModelDownload().catch(() => {
+      /* best-effort: the download may already have finished */
+    });
+  }
+}
+
+function isModelCancelError(err: unknown): boolean {
+  return /dibatalkan/i.test(String(err));
+}
+
+export const whisperModel = new WhisperModelStore();
+
+/// "548 MB"-style label for byte counts in the download prompt.
+export function formatBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return `${Math.round(n / (1024 * 1024))} MB`;
+}

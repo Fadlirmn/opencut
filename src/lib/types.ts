@@ -143,3 +143,18 @@ export type LlmStatus = {
   provider_label: string;
   auth_mode: LlmAuthMode;
 };
+
+/// Whether the whisper model (downloaded on demand, not bundled) is on disk.
+export type ModelStatus = {
+  present: boolean;
+  path: string | null;
+  /// A download is already running in the backend.
+  downloading: boolean;
+  /// Expected download size in bytes.
+  size_bytes: number;
+};
+
+export type ModelDownloadProgress = {
+  downloaded: number;
+  total: number;
+};

@@ -12,6 +12,8 @@ import type {
   LlmStatus,
   LogEntry,
   MediaInfo,
+  ModelDownloadProgress,
+  ModelStatus,
   SubtitleFormat,
   TrackProbe,
 } from "./types";
@@ -237,4 +239,28 @@ export async function llmListModels(apiBase: string, token?: string): Promise<st
 
 export async function llmTest(): Promise<void> {
   await invoke("llm_test");
+}
+
+// ===================== Whisper model (download on demand) =====================
+
+export async function modelStatus(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("model_status");
+}
+
+/// Resolves once the model is downloaded, verified, and in place. Rejects
+/// with a message containing "dibatalkan" when cancelled.
+export async function downloadModel(): Promise<void> {
+  await invoke("download_model");
+}
+
+export async function cancelModelDownload(): Promise<void> {
+  await invoke("cancel_model_download");
+}
+
+export function onModelDownloadProgress(
+  handler: (p: ModelDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ModelDownloadProgress>("model-download-progress", (event) => {
+    handler(event.payload);
+  });
 }

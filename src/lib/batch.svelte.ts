@@ -16,6 +16,7 @@ import {
   queueStart as apiQueueStart,
   saveSettings as apiSaveSettings,
 } from "./api";
+import { whisperModel } from "./store.svelte";
 import type { AppSettings, Job, LlmStatus, LogEntry } from "./types";
 
 export type Page = "upload" | "log" | "settings" | "profile";
@@ -41,6 +42,11 @@ class BatchStore {
   llmBusy = $state(false);
   llmError = $state<string | null>(null);
   llmTestResult = $state<string | null>(null);
+
+  /// "Proses Semua" was refused because subtitles are on and the whisper
+  /// model isn't downloaded; the upload page shows the download prompt.
+  modelNeeded = $state(false);
+  startError = $state<string | null>(null);
 
   private unlistenQueue: (() => void) | null = null;
   private initialized = false;
@@ -70,8 +76,21 @@ class BatchStore {
     await queueAdd(real);
   }
 
+  /// Start the queue. When subtitles are on and the whisper model hasn't
+  /// been downloaded yet, sets `modelNeeded` instead so the upload page can
+  /// offer the download; every job would otherwise fail at transcription.
   async start() {
-    await apiQueueStart();
+    this.startError = null;
+    if (this.settings?.burn_subtitles && !(await whisperModel.ensurePresent())) {
+      this.modelNeeded = true;
+      return;
+    }
+    this.modelNeeded = false;
+    try {
+      await apiQueueStart();
+    } catch (e) {
+      this.startError = String(e);
+    }
   }
 
   async remove(id: number) {

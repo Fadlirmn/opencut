@@ -1,5 +1,8 @@
 <script lang="ts">
   import { diagnosticInfo } from "../lib/api";
+  import { whisperModel } from "../lib/store.svelte";
+
+  void whisperModel.refresh();
 
   let displayName = $state("");
   let saved = $state(false);
@@ -70,7 +73,13 @@
         <div class="k">Platform</div>
       </div>
       <div class="about-item">
-        <div class="v mono">whisper small</div>
+        <div class="v mono" title={whisperModel.status?.path ?? ""}>
+          large-v3-turbo{whisperModel.status
+            ? whisperModel.present
+              ? ""
+              : " (belum diunduh)"
+            : ""}
+        </div>
         <div class="k">Model Subtitle</div>
       </div>
     </div>

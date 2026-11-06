@@ -49,6 +49,10 @@ pub struct AppState {
     pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub subtitle_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub llm_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Cancel flag of the in-flight whisper model download, if any. Also
+    /// doubles as the "a download is running" guard, so a second click
+    /// cannot start a parallel transfer into the same `.part` file.
+    pub model_download: Mutex<Option<Arc<AtomicBool>>>,
     pub analysis_cache: Arc<AnalysisCache>,
     /// The batch pipeline's job list. Unlike the single-slot cancel flags
     /// above, this supports any number of jobs — `queue::start` is what
@@ -67,6 +71,7 @@ impl AppState {
             waveform_cancel: Mutex::new(None),
             subtitle_cancel: Mutex::new(None),
             llm_cancel: Mutex::new(None),
+            model_download: Mutex::new(None),
             analysis_cache: Arc::new(AnalysisCache::default()),
             queue: Arc::new(JobQueue::default()),
             settings: Mutex::new(settings),
@@ -432,7 +437,7 @@ pub async fn generate_subtitles(
     format: SubtitleFormat,
 ) -> Result<String, String> {
     let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
-    let model = model_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let model = model_path(&state.app_data_dir, resource_dir(&app).as_deref()).map_err(fmt_err)?;
     let video: VideoSize = video.into();
     let source = PathBuf::from(&path);
     let cancel = install_cancel_slot(&state.subtitle_cancel);
@@ -783,8 +788,17 @@ pub fn queue_clear_done(app: AppHandle, state: State<'_, AppState>) {
 pub fn queue_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
     let ffprobe = ffprobe_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
-    let model = model_path(resource_dir(&app).as_deref()).ok();
+    let model = model_path(&state.app_data_dir, resource_dir(&app).as_deref()).ok();
     let settings = lock(&state.settings).clone();
+    // The frontend checks model_status and offers the download before
+    // getting here; this is the backstop so a missing model fails the click
+    // once, clearly, instead of failing every queued job one by one.
+    if settings.burn_subtitles && model.is_none() {
+        return Err(
+            "model whisper belum diunduh — unduh dulu, atau matikan subtitle di Settings"
+                .to_string(),
+        );
+    }
     let access_token = if settings.llm.auto_rewrite {
         load_active_llm_token().ok().flatten()
     } else {
@@ -803,6 +817,78 @@ pub fn queue_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), Str
         },
     );
     Ok(())
+}
+
+// ===================== Whisper model (download on demand) =====================
+
+#[derive(Debug, Serialize)]
+pub struct ModelStatus {
+    pub present: bool,
+    /// Where the usable model was found, if any.
+    pub path: Option<String>,
+    /// Whether a download is currently running (e.g. started from another
+    /// page), so the UI can show progress instead of a second button.
+    pub downloading: bool,
+    /// Expected download size in bytes, for the "~550 MB" prompt.
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub fn model_status(app: AppHandle, state: State<'_, AppState>) -> ModelStatus {
+    let found = model_path(&state.app_data_dir, resource_dir(&app).as_deref()).ok();
+    ModelStatus {
+        present: found.is_some(),
+        path: found.map(|p| p.display().to_string()),
+        downloading: lock(&state.model_download).is_some(),
+        size_bytes: crate::model::MODEL_SIZE,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModelDownloadProgress {
+    downloaded: u64,
+    total: u64,
+}
+
+/// Download the whisper model into `<app_data_dir>/models/`, emitting
+/// `model-download-progress` events. Resolves once the file is verified and
+/// in place; rejects with a message containing "dibatalkan" on cancel.
+#[tauri::command]
+pub async fn download_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let cancel = {
+        let mut slot = lock(&state.model_download);
+        if slot.is_some() {
+            return Err("model sedang diunduh".to_string());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *slot = Some(cancel.clone());
+        cancel
+    };
+    let dest = crate::model::downloaded_model_path(&state.app_data_dir);
+    let cancel_for_worker = cancel.clone();
+    let app_for_progress = app.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        crate::model::download(&dest, &cancel_for_worker, |downloaded, total| {
+            let _ = app_for_progress.emit(
+                "model-download-progress",
+                ModelDownloadProgress { downloaded, total },
+            );
+        })
+        .map_err(fmt_err)
+    })
+    .await;
+    clear_cancel_slot(&state.model_download, &cancel);
+    joined.map_err(fmt_err)?
+}
+
+#[tauri::command]
+pub fn cancel_model_download(state: State<'_, AppState>) {
+    // Not cancel_slot(): that would clear the slot immediately, letting a
+    // new download start while the old worker is still writing the same
+    // `.part` file. download_model clears it itself once the worker exits.
+    if let Some(flag) = lock(&state.model_download).as_ref() {
+        flag.store(true, Ordering::SeqCst);
+    }
 }
 
 // ===================== Settings =====================

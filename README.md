@@ -105,28 +105,35 @@ which angle is on top is an edit, not a cut.
 | Media I/O | ffmpeg / ffprobe, bundled sidecars |
 
 Everything runs on-device: the VAD model is compiled into the binary, and
-ffmpeg, ffprobe, and the Whisper model are fetched once at build time and
-shipped with the app, so no network call happens at runtime.
+ffmpeg and ffprobe are fetched once at build time and shipped with the app.
+The Whisper model (~550MB) is not bundled; the first time you turn on
+subtitles the app offers to download it from Hugging Face into its app-data
+folder (`<app data>/models/`), checks its sha256, and reuses it from then on.
+Audio and video never leave the machine.
 
 ## Development
 
 Svelte 5 and TypeScript in front, Rust and Tauri 2 behind, with ffmpeg,
-ffprobe, and a Whisper model as bundled/fetched sidecars. See [Stack](#stack)
-for the full list.
+ffprobe as bundled sidecars and a Whisper model downloaded at runtime. See
+[Stack](#stack) for the full list.
 
 ```sh
 pnpm install
-pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg + ~575MB whisper model
+pnpm tauri:dev                                # first build fetches ~200MB of ffmpeg
 
 pnpm test                                     # vitest, the cut algebra
-cd src-tauri && AUTOCUT_STUB_SIDECARS=1 AUTOCUT_STUB_MODEL=1 cargo test --lib
+cd src-tauri && AUTOCUT_STUB_SIDECARS=1 cargo test --lib
 ```
 
 `AUTOCUT_STUB_SIDECARS=1` drops empty placeholders where the ffmpeg binaries go,
-and `AUTOCUT_STUB_MODEL=1` does the same for the Whisper model, so a fresh
-checkout runs the unit tests without fetching either first. Never set them for
-a real build: the bundle cannot process video or transcribe, and it says so at
+so a fresh checkout runs the unit tests without fetching them first. Never set
+it for a real build: the bundle cannot process video, and it says so at
 compile time.
+
+A dev build finds the Whisper model the same way a release does (app-data
+`models/` folder, downloaded from inside the app). An existing
+`src-tauri/models/ggml-large-v3-turbo-q5_0.bin` from older checkouts is still
+picked up as a fallback.
 
 The version lives in `package.json`. `tauri.conf.json` reads it from there, and CI
 checks that `src-tauri/Cargo.toml` agrees.
