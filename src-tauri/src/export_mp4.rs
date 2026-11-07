@@ -3,6 +3,31 @@
 //! `outpoint` triple, ffmpeg seeks to each in turn and re-encodes (libx264 +
 //! aac). Lossless smart-cut is deferred.
 //!
+//! Frame accuracy: the concat demuxer can only seek to the keyframe at or
+//! before `inpoint`, and it passes those pre-roll frames through (stamped just
+//! before the segment's start, overlapping the previous segment). Re-encoding
+//! them made every segment too long — with a keyframe every ~8s a two-cut
+//! export grew by over a second — so the output drifted away from the
+//! timeline `timeline::map_to_output` (and the burned-in subtitles) assume.
+//! The fix is the one the concat demuxer docs prescribe:
+//! `-segment_time_metadata 1` tags each decoded frame with its segment's
+//! output window and `select=concatdec_select` / `aselect=concatdec_select`
+//! drop everything outside it. Those are constant expressions, so they cost
+//! the same for 2 intervals or 2000. Three details make it exact:
+//! - `-copyts`: the ffmpeg CLI otherwise shifts every input timestamp by the
+//!   input's start time (negative here, because of the pre-roll), while the
+//!   segment metadata stays in the demuxer's timeline, so the select window
+//!   lands in the wrong place and drops real frames.
+//! - `fps=<source rate>` after the select: kept intervals are not whole
+//!   frames long, so the surviving frames sit off the frame grid. `fps`
+//!   snaps them back onto it (each cut lands within half a frame of where
+//!   the cutlist puts it, without accumulating) and makes the output CFR at
+//!   the source rate.
+//! - `aresample=async`: `aselect` keeps or drops whole audio frames (~21ms),
+//!   so each boundary is off by part of a frame. Resampling against the
+//!   timestamps pads/trims to the exact timeline, so audio never drifts
+//!   from video no matter how many cuts there are.
+//!
 //! Why concat demuxer and not `filter_complex select`: building a single
 //! `select=between(t,a,b)+between(t,c,d)+...` expression scales linearly with
 //! the number of keeps. Past a few hundred intervals ffmpeg's expression
@@ -74,6 +99,9 @@ pub struct SourceSpec {
     pub audio_bitrate: Option<u64>,
     pub audio_sample_rate: Option<u32>,
     pub audio_channels: Option<u32>,
+    /// Video frame rate. `None` when unknown, in which case the output keeps
+    /// the selected frames' own (exact but off-grid) timestamps.
+    pub fps: Option<f64>,
 }
 
 impl From<&crate::probe::MediaInfo> for SourceSpec {
@@ -86,6 +114,7 @@ impl From<&crate::probe::MediaInfo> for SourceSpec {
             audio_bitrate: info.audio_bitrate,
             audio_sample_rate: info.audio_sample_rate,
             audio_channels: info.audio_channels,
+            fps: (info.has_video && info.fps.is_finite() && info.fps > 0.0).then_some(info.fps),
         }
     }
 }
@@ -182,8 +211,12 @@ pub fn export(
         "pipe:2",
         "-loglevel",
         "error",
+        // Keep the demuxer's timestamps so they line up with the
+        // per-segment metadata `concatdec_select` compares against (see the
+        // module docs). The first kept frame is at 0 either way.
+        "-copyts",
     ])
-    .args(["-f", "concat", "-safe", "0"])
+    .args(["-f", "concat", "-safe", "0", "-segment_time_metadata", "1"])
     .arg("-i")
     .arg(&list_path)
     .args(["-c:v", "libx264", "-preset", "veryfast"]);
@@ -196,11 +229,14 @@ pub fn export(
         options.quality,
         scaled_bitrate(&options.source, out_size),
     ));
-    // Scale and/or burn in subtitles via -vf. Concat demuxer produces
-    // continuous timestamps across segments on its own, no setpts needed. Both filters, when
-    // present, must be comma-joined into one -vf chain — ffmpeg takes a
-    // single filter graph, not one flag per filter.
-    let mut filters: Vec<String> = Vec::new();
+    // Trim to the exact kept windows, then scale and/or burn in subtitles.
+    // Concat demuxer produces continuous timestamps across segments on its
+    // own, no setpts needed. Everything must be comma-joined into one -vf
+    // chain — ffmpeg takes a single filter graph, not one flag per filter.
+    let mut filters: Vec<String> = vec![VIDEO_SELECT.to_string()];
+    if let Some(fps) = options.source.fps.and_then(fps_filter) {
+        filters.push(fps);
+    }
     if let Some(path) = &subtitle_path {
         let (dir, filter) = subtitle_filter(path)?;
         cmd.current_dir(dir);
@@ -213,16 +249,19 @@ pub fn export(
         // capped at the target height and never upscaling.
         filters.push(format!("scale=-2:'min({h},ih)'"));
     }
-    if !filters.is_empty() {
-        cmd.args(["-vf", &filters.join(",")]);
-    }
+    cmd.args(["-vf", &filters.join(",")]);
     if options.has_audio {
-        cmd.arg("-c:a")
+        cmd.args(["-af", AUDIO_SELECT])
+            .arg("-c:a")
             .arg("aac")
             .args(audio_args(options.quality, &options.source));
     } else {
         cmd.arg("-an");
     }
+    // Cap the output at the cutlist's total. `fps` can pad the tail by a
+    // frame or two (it extends to the last decoded frame's duration, which
+    // B-frame sources over-report), and audio can run one AAC frame past.
+    cmd.arg("-t").arg(format!("{kept_total:.6}"));
     cmd.arg(&output);
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
@@ -320,6 +359,42 @@ pub fn export(
         let _ = std::fs::remove_file(output);
     }
     outcome
+}
+
+/// Drops the concat demuxer's keyframe pre-roll (and anything past
+/// `outpoint`): keeps only frames inside their segment's output window.
+const VIDEO_SELECT: &str = "select=concatdec_select";
+
+/// Audio counterpart of [`VIDEO_SELECT`]. `aselect` works in whole audio
+/// frames, so `aresample` then pads or trims against the timestamps (hard
+/// compensation past 1ms) to keep the audio on the exact cut timeline, and
+/// `first_pts=0` drops the part of the first frame before the first inpoint.
+const AUDIO_SELECT: &str =
+    "aselect=concatdec_select,aresample=async=1:min_hard_comp=0.001:first_pts=0";
+
+/// `fps` filter that snaps the selected frames onto the source's frame grid,
+/// or `None` for a rate that isn't usable.
+///
+/// The probe hands the rate over as an `f64`; written as a decimal, ffmpeg
+/// would turn 29.97002997 into some 2997003/100000 rather than the source's
+/// 30000/1001, so integer and NTSC (`n*1000/1001`) rates go back out as the
+/// exact rational. Anything else (a VFR clip's average) is passed as is.
+fn fps_filter(fps: f64) -> Option<String> {
+    if !(fps.is_finite() && fps > 0.0 && fps <= 1000.0) {
+        return None;
+    }
+    const EPS: f64 = 1e-6;
+    let whole = fps.round();
+    if (fps - whole).abs() < EPS {
+        return Some(format!("fps={whole}"));
+    }
+    let ntsc = (fps * 1001.0 / 1000.0).round();
+    if (fps - ntsc * 1000.0 / 1001.0).abs() < EPS {
+        return Some(format!("fps={}/1001", ntsc * 1000.0));
+    }
+    let s = format!("{fps:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    Some(format!("fps={s}"))
 }
 
 /// libx264 rate-control flags. `Source` with a known bitrate encodes to that
@@ -437,7 +512,9 @@ fn build_concat_list(source: &Path, cutlist: &CutList) -> String {
     let escaped = source.to_string_lossy().replace('\'', "'\\''");
     let mut out = String::new();
     out.push_str("ffconcat version 1.0\n");
-    for c in cutlist.kept_intervals() {
+    // Empty keeps are skipped, as in `timeline::keep_windows`: the concat
+    // demuxer would only spend a seek on them.
+    for c in cutlist.kept_intervals().filter(|c| c.end > c.start) {
         out.push_str(&format!("file '{escaped}'\n"));
         out.push_str(&format!("inpoint {:.6}\n", c.start));
         out.push_str(&format!("outpoint {:.6}\n", c.end));
@@ -494,6 +571,68 @@ fn subtitle_filter(path: &Path) -> Result<(PathBuf, String)> {
 mod tests {
     use super::*;
     use crate::cutlist::{Cut, CutKind};
+
+    #[test]
+    fn fps_filter_keeps_integer_and_ntsc_rates_exact() {
+        assert_eq!(fps_filter(30.0).as_deref(), Some("fps=30"));
+        assert_eq!(fps_filter(25.0).as_deref(), Some("fps=25"));
+        assert_eq!(
+            fps_filter(30000.0 / 1001.0).as_deref(),
+            Some("fps=30000/1001")
+        );
+        assert_eq!(
+            fps_filter(24000.0 / 1001.0).as_deref(),
+            Some("fps=24000/1001")
+        );
+        assert_eq!(
+            fps_filter(60000.0 / 1001.0).as_deref(),
+            Some("fps=60000/1001")
+        );
+    }
+
+    #[test]
+    fn fps_filter_passes_other_rates_as_decimals() {
+        assert_eq!(fps_filter(29.87).as_deref(), Some("fps=29.87"));
+        assert_eq!(fps_filter(12.5).as_deref(), Some("fps=12.5"));
+    }
+
+    #[test]
+    fn fps_filter_rejects_unusable_rates() {
+        for fps in [0.0, -30.0, f64::NAN, f64::INFINITY, 90_000.0] {
+            assert_eq!(fps_filter(fps), None, "{fps}");
+        }
+    }
+
+    #[test]
+    fn select_filters_are_constant_size() {
+        // The whole point of concatdec_select: the filter text must not grow
+        // with the number of kept intervals (see module docs).
+        assert_eq!(VIDEO_SELECT, "select=concatdec_select");
+        assert!(AUDIO_SELECT.starts_with("aselect=concatdec_select,"));
+        assert!(AUDIO_SELECT.contains("first_pts=0"));
+    }
+
+    #[test]
+    fn concat_list_skips_empty_keeps() {
+        let cl = CutList {
+            source_duration: 5.0,
+            intervals: vec![
+                Cut {
+                    start: 1.0,
+                    end: 1.0,
+                    kind: CutKind::Keep,
+                },
+                Cut {
+                    start: 2.0,
+                    end: 3.0,
+                    kind: CutKind::Keep,
+                },
+            ],
+        };
+        let list = build_concat_list(Path::new("/tmp/clip.mp4"), &cl);
+        assert_eq!(list.matches("file ").count(), 1, "{list}");
+        assert!(list.contains("inpoint 2.000000\noutpoint 3.000000"));
+    }
 
     #[test]
     fn concat_list_emits_one_entry_per_kept_interval() {
