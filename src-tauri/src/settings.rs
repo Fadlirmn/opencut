@@ -45,6 +45,20 @@ pub struct AppSettings {
     pub output_dir: Option<String>,
     #[serde(default)]
     pub llm: LlmSettings,
+    /// Bumped when a stored default must be migrated on load. Absent from
+    /// files written before v1; the frontend round-trips it unchanged, and a
+    /// save that omits it is treated as already current.
+    #[serde(default = "current_settings_version")]
+    pub settings_version: u32,
+}
+
+/// v1: the "source" (asli) export quality became the default. Files without
+/// a version predate it and still carry the old "medium" default, so they
+/// get switched to source once.
+const SETTINGS_VERSION: u32 = 1;
+
+fn current_settings_version() -> u32 {
+    SETTINGS_VERSION
 }
 
 fn default_parallel_count() -> u32 {
@@ -67,6 +81,7 @@ impl Default for AppSettings {
             resolution: default_resolution(),
             output_dir: None,
             llm: LlmSettings::default(),
+            settings_version: SETTINGS_VERSION,
         }
     }
 }
@@ -90,8 +105,23 @@ pub fn load(app_data_dir: &Path) -> AppSettings {
     let path = settings_path(app_data_dir);
     fs::read_to_string(&path)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| parse(&s))
         .unwrap_or_default()
+}
+
+/// Parse stored settings, migrating files written by older versions.
+fn parse(raw: &str) -> Option<AppSettings> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let stored_version = value
+        .get("settings_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut settings: AppSettings = serde_json::from_value(value).ok()?;
+    if stored_version < 1 {
+        settings.quality = ExportQuality::Source;
+    }
+    settings.settings_version = SETTINGS_VERSION;
+    Some(settings)
 }
 
 pub fn save(app_data_dir: &Path, settings: &AppSettings) -> Result<()> {
@@ -142,6 +172,20 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let loaded = load(&dir);
         assert!(!loaded.parallel_enabled);
+    }
+
+    #[test]
+    fn pre_v1_settings_switch_to_source_quality() {
+        let s = parse(r#"{"quality": "medium", "resolution": "720p"}"#).unwrap();
+        assert!(matches!(s.quality, ExportQuality::Source));
+        assert!(matches!(s.resolution, ExportResolution::P720));
+        assert_eq!(s.settings_version, SETTINGS_VERSION);
+    }
+
+    #[test]
+    fn current_settings_keep_the_chosen_quality() {
+        let s = parse(r#"{"quality": "small", "settings_version": 1}"#).unwrap();
+        assert!(matches!(s.quality, ExportQuality::Small));
     }
 
     #[test]

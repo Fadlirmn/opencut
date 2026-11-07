@@ -156,6 +156,8 @@ export type AppSettings = {
   resolution: ExportResolution;
   output_dir: string | null;
   llm: LlmSettings;
+  /// Backend migration marker; round-tripped untouched.
+  settings_version?: number;
 };
 
 export type LlmAuthMode = "api_key" | "oauth" | "none";
