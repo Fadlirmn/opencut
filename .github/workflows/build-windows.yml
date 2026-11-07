@@ -44,11 +44,11 @@ jobs:
           # into the binary and crashes with SIGILL on ordinary laptops. OFF
           # pins a portable AVX2/FMA/F16C baseline instead.
           GGML_NATIVE: 'OFF'
-          # cmake-rs (0.1.58) overrides CMAKE_C_FLAGS_RELEASE for MSVC and
-          # strips every -O/ /O flag from CFLAGS, so ggml/whisper.cpp was built
-          # with no optimization (~9x slower than Linux). CL is read by cl.exe
-          # itself, bypassing cmake-rs. Dash form: Git Bash rewrites "/O2"
-          # into a path.
+          # cmake-rs (0.1.58) strips -O/ /O from CFLAGS for MSVC; CL is read by
+          # cl.exe itself, so -O2 still reaches ggml. Benched as a no-op (48.4s vs
+          # 46.6s), kept as harmless. It did NOT cause the slow user-laptop runs:
+          # CI Windows is within ~15% of Linux (41.8s vs 36.4s). Dash form: Git
+          # Bash rewrites "/O2" into a path.
           CL: '-O2'
         # NSIS only, matching release.yml: the default "all" would also build
         # an MSI, a second ~600MB installer of the same payload.
