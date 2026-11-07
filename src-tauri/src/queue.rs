@@ -449,9 +449,11 @@ fn process_one(
         }
 
         let style = SubtitleStyle::default();
+        // Display orientation: ffmpeg auto-rotates before the ass filter runs.
+        let (width, height) = info.display_size();
         let video = VideoSize {
-            width: info.width.max(2),
-            height: info.height.max(2),
+            width: width.max(2),
+            height: height.max(2),
         };
         subtitle_ass = Some(render_ass(&mapped, video, &style));
     }
@@ -463,6 +465,7 @@ fn process_one(
         resolution: settings.resolution.into(),
         has_audio: info.has_audio,
         subtitle_ass,
+        source: export_mp4::SourceSpec::from(&info),
     };
     let progress_for_export = progress.clone();
     export_mp4::export(

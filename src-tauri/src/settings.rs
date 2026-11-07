@@ -51,7 +51,7 @@ fn default_parallel_count() -> u32 {
     2
 }
 fn default_quality() -> ExportQuality {
-    ExportQuality::Medium
+    ExportQuality::Source
 }
 fn default_resolution() -> ExportResolution {
     ExportResolution::Source

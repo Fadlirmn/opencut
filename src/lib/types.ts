@@ -64,7 +64,7 @@ export type DetectParams = {
   source_offset: number;
 };
 
-export type ExportQuality = "high" | "medium" | "small";
+export type ExportQuality = "source" | "high" | "medium" | "small";
 export type ExportResolution = "source" | "1080p" | "720p" | "480p";
 
 export type ExportOptions = {

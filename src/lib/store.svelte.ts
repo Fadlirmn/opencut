@@ -117,7 +117,7 @@ class EditorStore {
   lastExport = $state<{ path: string; format: "mp4" | "fcpxml" } | null>(null);
   params = $state<DetectParams>({ ...DEFAULTS });
   exportOptions = $state<ExportOptions>({
-    quality: "medium",
+    quality: "source",
     resolution: "source",
   });
   /// Whether an mp4 export should transcribe and burn in Indonesian

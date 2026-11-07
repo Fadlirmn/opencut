@@ -129,6 +129,7 @@
   let keptPct = $derived(totalDuration > 0 ? (keptDuration / totalDuration) * 100 : 0);
 
   const qualityOptions: { value: ExportQuality; label: string; hint: string }[] = [
+    { value: "source", label: "source", hint: "same bitrate as the source · same size per second" },
     { value: "high", label: "high", hint: "crf 18 · ~visually lossless" },
     { value: "medium", label: "medium", hint: "crf 22 · good for share" },
     { value: "small", label: "small", hint: "crf 26 · smallest file" },

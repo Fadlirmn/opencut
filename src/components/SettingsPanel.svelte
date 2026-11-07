@@ -13,6 +13,7 @@
   });
 
   const qualityOptions: { value: ExportQuality; label: string }[] = [
+    { value: "source", label: "asli" },
     { value: "high", label: "tinggi" },
     { value: "medium", label: "sedang" },
     { value: "small", label: "kecil" },

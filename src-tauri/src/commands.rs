@@ -481,6 +481,8 @@ pub fn save_subtitles(path: String, contents: String) -> Result<(), String> {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportQuality {
+    /// Match the source's bitrate so size and quality track the input.
+    Source,
     High,
     Medium,
     Small,
@@ -516,7 +518,7 @@ pub struct ExportMp4Args {
 }
 
 fn default_quality() -> ExportQuality {
-    ExportQuality::Medium
+    ExportQuality::Source
 }
 fn default_resolution() -> ExportResolution {
     ExportResolution::Source
@@ -528,6 +530,7 @@ fn default_has_audio() -> bool {
 impl From<ExportQuality> for export_mp4::Quality {
     fn from(q: ExportQuality) -> Self {
         match q {
+            ExportQuality::Source => export_mp4::Quality::Source,
             ExportQuality::High => export_mp4::Quality::High,
             ExportQuality::Medium => export_mp4::Quality::Medium,
             ExportQuality::Small => export_mp4::Quality::Small,
@@ -558,9 +561,17 @@ pub async fn export_mp4(
     state: State<'_, AppState>,
     args: ExportMp4Args,
 ) -> Result<(), String> {
-    let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
+    let rd = resource_dir(&app);
+    let ffmpeg = ffmpeg_path(rd.as_deref()).map_err(fmt_err)?;
     let source = PathBuf::from(&args.source);
     let output = PathBuf::from(&args.output);
+    // The export matches the source's size and bitrate, so it needs the
+    // source's stream details. A failed probe isn't fatal: the export falls
+    // back to CRF and lets ffmpeg keep the frame size.
+    let source_spec = ffprobe_path(rd.as_deref())
+        .and_then(|ffprobe| probe(&ffprobe, &source))
+        .map(|info| export_mp4::SourceSpec::from(&info))
+        .unwrap_or_default();
 
     let cancel = install_cancel_slot(&state.export_cancel);
 
@@ -572,6 +583,7 @@ pub async fn export_mp4(
         resolution: args.resolution.into(),
         has_audio: args.has_audio,
         subtitle_ass: args.subtitle_ass,
+        source: source_spec,
     };
     thread::spawn(move || {
         let on_progress = move |p: export_mp4::ExportProgress| {

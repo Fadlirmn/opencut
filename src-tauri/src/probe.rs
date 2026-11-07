@@ -30,6 +30,34 @@ pub struct MediaInfo {
     /// (e.g. `15:33:27;24`). Used for FCPXML source-TC alignment and for
     /// working out where a linked track sits relative to the reference.
     pub start_timecode: Option<String>,
+    /// Video stream bitrate in bits/s. Falls back to the container bitrate
+    /// minus the audio bitrate when the stream doesn't declare one (common in
+    /// mkv/webm). Lets the export match the source's file size.
+    #[serde(default)]
+    pub video_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_bitrate: Option<u64>,
+    #[serde(default)]
+    pub audio_sample_rate: Option<u32>,
+    #[serde(default)]
+    pub audio_channels: Option<u32>,
+    /// Clockwise display rotation (0/90/180/270) from the display matrix or
+    /// the legacy `rotate` tag. Phone footage is often stored landscape and
+    /// flagged 90°; ffmpeg auto-rotates on re-encode, so output dimensions
+    /// follow the displayed orientation, not the coded one.
+    #[serde(default)]
+    pub rotation: i32,
+}
+
+impl MediaInfo {
+    /// Width/height as displayed, i.e. after applying `rotation`.
+    pub fn display_size(&self) -> (u32, u32) {
+        if self.rotation == 90 || self.rotation == 270 {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        }
+    }
 }
 
 pub fn probe(ffprobe: &Path, media: &Path) -> Result<MediaInfo> {
@@ -120,6 +148,33 @@ fn parse_probe_json(json: &serde_json::Value, media: &Path) -> Result<MediaInfo>
                 .map(|s| s.to_string())
         });
 
+    let audio_stream = of_type("audio");
+    let bitrate = |s: Option<&serde_json::Value>| {
+        s.and_then(|s| s.get("bit_rate"))
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|b| *b > 0)
+    };
+    let audio_bitrate = bitrate(audio_stream);
+    let video_bitrate = video_stream.and_then(|v| {
+        bitrate(Some(v)).or_else(|| {
+            bitrate(json.get("format"))
+                .map(|total| total.saturating_sub(audio_bitrate.unwrap_or(0)))
+                .filter(|b| *b > 0)
+        })
+    });
+    let audio_sample_rate = audio_stream
+        .and_then(|s| s.get("sample_rate"))
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|r| *r > 0);
+    let audio_channels = audio_stream
+        .and_then(|s| s.get("channels"))
+        .and_then(|v| v.as_u64())
+        .map(|c| c as u32)
+        .filter(|c| *c > 0);
+    let rotation = video_stream.map(find_rotation).unwrap_or(0);
+
     Ok(MediaInfo {
         path: media.to_string_lossy().to_string(),
         duration,
@@ -129,7 +184,38 @@ fn parse_probe_json(json: &serde_json::Value, media: &Path) -> Result<MediaInfo>
         has_video: video_stream.is_some(),
         has_audio,
         start_timecode,
+        video_bitrate,
+        audio_bitrate,
+        audio_sample_rate,
+        audio_channels,
+        rotation,
     })
+}
+
+/// Read the display rotation, normalised to a clockwise 0/90/180/270.
+///
+/// ffprobe reports the display matrix rotation counter-clockwise (a phone
+/// held upright typically shows `-90`), the legacy `rotate` tag clockwise.
+/// For deciding whether width and height swap, only the right angle matters.
+fn find_rotation(stream: &serde_json::Value) -> i32 {
+    let from_matrix = stream
+        .get("side_data_list")
+        .and_then(|l| l.as_array())
+        .and_then(|l| {
+            l.iter()
+                .find_map(|d| d.get("rotation").and_then(|r| r.as_f64()))
+        })
+        .map(|r| -r);
+    let from_tag = || {
+        stream
+            .get("tags")
+            .and_then(|t| t.get("rotate"))
+            .and_then(|r| r.as_str())
+            .and_then(|r| r.parse::<f64>().ok())
+    };
+    let deg = from_matrix.or_else(from_tag).unwrap_or(0.0);
+    let quarter = (deg / 90.0).round() as i64;
+    (quarter.rem_euclid(4) * 90) as i32
 }
 
 /// Assumed when the container declares no usable frame rate. Only FCPXML
@@ -291,6 +377,90 @@ mod tests {
         )
         .expect("probes cleanly");
         assert!((info.duration - 9.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reads_stream_bitrates_and_audio_format() {
+        let info = parse_probe_json(
+            &json(
+                r#"{
+                    "streams": [
+                        {"codec_type": "video", "width": 1080, "height": 1920,
+                         "avg_frame_rate": "30/1", "bit_rate": "8000000"},
+                        {"codec_type": "audio", "bit_rate": "256000",
+                         "sample_rate": "48000", "channels": 2}
+                    ],
+                    "format": {"duration": "5", "bit_rate": "8300000"}
+                }"#,
+            ),
+            Path::new("/clips/a.mp4"),
+        )
+        .expect("probes cleanly");
+        assert_eq!(info.video_bitrate, Some(8_000_000));
+        assert_eq!(info.audio_bitrate, Some(256_000));
+        assert_eq!(info.audio_sample_rate, Some(48_000));
+        assert_eq!(info.audio_channels, Some(2));
+        assert_eq!(info.rotation, 0);
+        assert_eq!(info.display_size(), (1080, 1920));
+    }
+
+    #[test]
+    fn video_bitrate_falls_back_to_container_minus_audio() {
+        // mkv/webm rarely carry a per-stream bit_rate.
+        let info = parse_probe_json(
+            &json(
+                r#"{
+                    "streams": [
+                        {"codec_type": "video", "width": 1920, "height": 1080,
+                         "avg_frame_rate": "25/1"},
+                        {"codec_type": "audio", "bit_rate": "128000"}
+                    ],
+                    "format": {"duration": "5", "bit_rate": "4128000"}
+                }"#,
+            ),
+            Path::new("/clips/a.mkv"),
+        )
+        .expect("probes cleanly");
+        assert_eq!(info.video_bitrate, Some(4_000_000));
+    }
+
+    #[test]
+    fn rotated_phone_footage_swaps_display_size() {
+        let info = parse_probe_json(
+            &json(
+                r#"{
+                    "streams": [
+                        {"codec_type": "video", "width": 1920, "height": 1080,
+                         "avg_frame_rate": "30/1",
+                         "side_data_list": [{"side_data_type": "Display Matrix", "rotation": -90}]}
+                    ],
+                    "format": {"duration": "5"}
+                }"#,
+            ),
+            Path::new("/clips/phone.mov"),
+        )
+        .expect("probes cleanly");
+        assert_eq!(info.rotation, 90);
+        assert_eq!(info.display_size(), (1080, 1920));
+    }
+
+    #[test]
+    fn legacy_rotate_tag_is_read() {
+        let info = parse_probe_json(
+            &json(
+                r#"{
+                    "streams": [
+                        {"codec_type": "video", "width": 1920, "height": 1080,
+                         "avg_frame_rate": "30/1", "tags": {"rotate": "270"}}
+                    ],
+                    "format": {"duration": "5"}
+                }"#,
+            ),
+            Path::new("/clips/old.mp4"),
+        )
+        .expect("probes cleanly");
+        assert_eq!(info.rotation, 270);
+        assert_eq!(info.display_size(), (1080, 1920));
     }
 
     #[test]

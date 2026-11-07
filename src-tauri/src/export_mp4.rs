@@ -31,18 +31,25 @@ pub struct ExportProgress {
     pub message: String,
 }
 
-/// Quality preset chosen by the user. CRF is libx264's rate-distortion knob:
-/// lower = higher quality + bigger file. Audio bitrate scales with it.
+/// Quality preset chosen by the user. `Source` targets the source's own
+/// bitrate so the export lands at roughly the same size per second as the
+/// input; the others are fixed libx264 CRF levels (lower = higher quality +
+/// bigger file) with an audio bitrate that scales with them.
 #[derive(Debug, Clone, Copy)]
 pub enum Quality {
+    Source,
     High,
     Medium,
     Small,
 }
 
+/// CRF used for `Quality::Source` when the source bitrate is unknown.
+const SOURCE_FALLBACK_CRF: u8 = 20;
+
 impl Quality {
     fn crf(self) -> u8 {
         match self {
+            Quality::Source => SOURCE_FALLBACK_CRF,
             Quality::High => 18,
             Quality::Medium => 22,
             Quality::Small => 26,
@@ -50,16 +57,42 @@ impl Quality {
     }
     fn audio_bitrate(self) -> &'static str {
         match self {
-            Quality::High => "192k",
+            Quality::Source | Quality::High => "192k",
             Quality::Medium => "128k",
             Quality::Small => "96k",
         }
     }
 }
 
+/// What the export needs to know about the source to match it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SourceSpec {
+    /// Display size (rotation already applied). Zero when unknown.
+    pub width: u32,
+    pub height: u32,
+    pub video_bitrate: Option<u64>,
+    pub audio_bitrate: Option<u64>,
+    pub audio_sample_rate: Option<u32>,
+    pub audio_channels: Option<u32>,
+}
+
+impl From<&crate::probe::MediaInfo> for SourceSpec {
+    fn from(info: &crate::probe::MediaInfo) -> Self {
+        let (width, height) = info.display_size();
+        Self {
+            width,
+            height,
+            video_bitrate: info.video_bitrate,
+            audio_bitrate: info.audio_bitrate,
+            audio_sample_rate: info.audio_sample_rate,
+            audio_channels: info.audio_channels,
+        }
+    }
+}
+
 /// Output resolution. `Source` keeps the original dimensions; the numeric
-/// variants downscale to that target height (using `-2` for width to keep
-/// the aspect ratio while staying divisible by 2 for h264).
+/// variants cap the *short* side at that size (so 720p of a 1080x1920
+/// portrait clip is 720x1280, not 404x720) and never upscale.
 #[derive(Debug, Clone, Copy)]
 pub enum Resolution {
     Source,
@@ -87,15 +120,17 @@ pub struct ExportOptions {
     /// Rendered ASS subtitle text to burn into the output via ffmpeg's `ass`
     /// filter. `None` skips subtitle filtering entirely.
     pub subtitle_ass: Option<String>,
+    pub source: SourceSpec,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
-            quality: Quality::Medium,
+            quality: Quality::Source,
             resolution: Resolution::Source,
             has_audio: true,
             subtitle_ass: None,
+            source: SourceSpec::default(),
         }
     }
 }
@@ -128,8 +163,6 @@ pub fn export(
         None => None,
     };
 
-    let crf = options.quality.crf().to_string();
-
     // Relative paths would resolve against the ffmpeg working directory,
     // which is moved to the subtitle's folder below; pin the output first.
     let output = if output.is_relative() {
@@ -153,11 +186,18 @@ pub fn export(
     .args(["-f", "concat", "-safe", "0"])
     .arg("-i")
     .arg(&list_path)
-    .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf]);
-    // Downscale and/or burn in subtitles via -vf. `-2` on the width side asks
-    // ffmpeg to pick whatever keeps the aspect ratio and stays divisible by 2
-    // (libx264 requirement). Concat demuxer produces continuous timestamps
-    // across segments on its own, no setpts needed. Both filters, when
+    .args(["-c:v", "libx264", "-preset", "veryfast"]);
+    let out_size = output_size(
+        options.source.width,
+        options.source.height,
+        options.resolution.target_height(),
+    );
+    cmd.args(video_rate_args(
+        options.quality,
+        scaled_bitrate(&options.source, out_size),
+    ));
+    // Scale and/or burn in subtitles via -vf. Concat demuxer produces
+    // continuous timestamps across segments on its own, no setpts needed. Both filters, when
     // present, must be comma-joined into one -vf chain — ffmpeg takes a
     // single filter graph, not one flag per filter.
     let mut filters: Vec<String> = Vec::new();
@@ -166,14 +206,20 @@ pub fn export(
         cmd.current_dir(dir);
         filters.push(filter);
     }
-    if let Some(h) = options.resolution.target_height() {
-        filters.push(format!("scale=-2:{h}"));
+    if let Some((w, h)) = out_size {
+        filters.push(format!("scale={w}:{h}"));
+    } else if let Some(h) = options.resolution.target_height() {
+        // Source size unknown: fall back to letting ffmpeg work it out,
+        // capped at the target height and never upscaling.
+        filters.push(format!("scale=-2:'min({h},ih)'"));
     }
     if !filters.is_empty() {
         cmd.args(["-vf", &filters.join(",")]);
     }
     if options.has_audio {
-        cmd.args(["-c:a", "aac", "-b:a", options.quality.audio_bitrate()]);
+        cmd.arg("-c:a")
+            .arg("aac")
+            .args(audio_args(options.quality, &options.source));
     } else {
         cmd.arg("-an");
     }
@@ -274,6 +320,92 @@ pub fn export(
         let _ = std::fs::remove_file(output);
     }
     outcome
+}
+
+/// libx264 rate-control flags. `Source` with a known bitrate encodes to that
+/// average bitrate (VBV-capped at 1.5x so a busy scene can't balloon), which
+/// keeps the export's size proportional to the source's. Everything else is
+/// constant-quality CRF.
+fn video_rate_args(quality: Quality, video_bitrate: Option<u64>) -> Vec<String> {
+    match (quality, video_bitrate) {
+        (Quality::Source, Some(b)) => vec![
+            "-b:v".into(),
+            b.to_string(),
+            "-maxrate".into(),
+            (b * 3 / 2).to_string(),
+            "-bufsize".into(),
+            (b * 2).to_string(),
+        ],
+        _ => vec!["-crf".into(), quality.crf().to_string()],
+    }
+}
+
+/// Source video bitrate adjusted for a downscale: same bits per pixel, so a
+/// 720p export of a 1080p source is proportionally smaller instead of
+/// spending the full source bitrate on fewer pixels.
+fn scaled_bitrate(source: &SourceSpec, out_size: Option<(u32, u32)>) -> Option<u64> {
+    let b = source.video_bitrate?;
+    let src_px = source.width as u64 * source.height as u64;
+    match out_size {
+        Some((w, h)) if src_px > 0 => {
+            Some((b as u128 * (w as u128 * h as u128) / src_px as u128) as u64)
+        }
+        _ => Some(b),
+    }
+}
+
+/// AAC flags. `Source` mirrors the source's bitrate (clamped to a sane AAC
+/// range), sample rate, and channel count; the presets use a fixed bitrate.
+fn audio_args(quality: Quality, source: &SourceSpec) -> Vec<String> {
+    let mut args = Vec::new();
+    match quality {
+        Quality::Source => {
+            let bitrate = source
+                .audio_bitrate
+                .map(|b| b.clamp(64_000, 320_000).to_string())
+                .unwrap_or_else(|| quality.audio_bitrate().to_string());
+            args.extend(["-b:a".to_string(), bitrate]);
+            if let Some(rate) = source.audio_sample_rate {
+                args.extend(["-ar".to_string(), rate.to_string()]);
+            }
+            if let Some(ch) = source.audio_channels {
+                args.extend(["-ac".to_string(), ch.to_string()]);
+            }
+        }
+        _ => args.extend(["-b:a".to_string(), quality.audio_bitrate().to_string()]),
+    }
+    args
+}
+
+/// Output frame size for a source of `w`x`h` (display orientation), or `None`
+/// when the source size can be passed through untouched.
+///
+/// `target` caps the short side, aspect ratio preserved, never upscaling.
+/// Both sides are rounded to even numbers — libx264's yuv420p refuses odd
+/// dimensions, so an odd-sized source gets trimmed by one pixel even when no
+/// target is set. Unknown size (0) returns `None`.
+fn output_size(w: u32, h: u32, target: Option<u32>) -> Option<(u32, u32)> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let even = |v: f64| ((v / 2.0).round() as u32 * 2).max(2);
+    let short = w.min(h);
+    let (out_w, out_h) = match target {
+        Some(t) if t < short => {
+            let scale = t as f64 / short as f64;
+            if w <= h {
+                (even(t as f64), even(h as f64 * scale))
+            } else {
+                (even(w as f64 * scale), even(t as f64))
+            }
+        }
+        _ => (w - w % 2, h - h % 2),
+    };
+    if (out_w, out_h) == (w, h) {
+        None
+    } else {
+        Some((out_w.max(2), out_h.max(2)))
+    }
 }
 
 /// Is this stderr line one of ffmpeg's `-progress` fields rather than a
@@ -448,6 +580,77 @@ mod tests {
     fn subtitle_temp_name_needs_no_escaping() {
         let (_, filter) = subtitle_filter(&subtitle_temp_path()).unwrap();
         assert!(filter.starts_with("ass=autocut-subs-"), "{filter}");
+    }
+
+    #[test]
+    fn output_size_keeps_an_even_source_untouched() {
+        assert_eq!(output_size(1920, 1080, None), None);
+        assert_eq!(output_size(1080, 1920, None), None);
+    }
+
+    #[test]
+    fn output_size_caps_the_short_side_of_portrait_video() {
+        assert_eq!(output_size(1080, 1920, Some(720)), Some((720, 1280)));
+        assert_eq!(output_size(1920, 1080, Some(720)), Some((1280, 720)));
+    }
+
+    #[test]
+    fn output_size_never_upscales() {
+        assert_eq!(output_size(1280, 720, Some(1080)), None);
+        assert_eq!(output_size(1080, 1920, Some(1080)), None);
+    }
+
+    #[test]
+    fn output_size_trims_odd_dimensions_to_even() {
+        assert_eq!(output_size(1921, 1080, None), Some((1920, 1080)));
+        assert_eq!(output_size(1081, 1921, Some(720)), Some((720, 1280)));
+    }
+
+    #[test]
+    fn output_size_is_none_when_source_size_unknown() {
+        assert_eq!(output_size(0, 0, Some(720)), None);
+    }
+
+    #[test]
+    fn source_quality_targets_the_source_bitrate() {
+        assert_eq!(
+            video_rate_args(Quality::Source, Some(8_000_000)),
+            ["-b:v", "8000000", "-maxrate", "12000000", "-bufsize", "16000000"]
+        );
+    }
+
+    #[test]
+    fn source_quality_falls_back_to_crf_without_a_bitrate() {
+        assert_eq!(video_rate_args(Quality::Source, None), ["-crf", "20"]);
+        assert_eq!(video_rate_args(Quality::Medium, Some(1)), ["-crf", "22"]);
+    }
+
+    #[test]
+    fn downscaling_scales_the_bitrate_by_pixel_count() {
+        let src = SourceSpec {
+            width: 1080,
+            height: 1920,
+            video_bitrate: Some(9_000_000),
+            ..Default::default()
+        };
+        assert_eq!(scaled_bitrate(&src, None), Some(9_000_000));
+        assert_eq!(scaled_bitrate(&src, Some((720, 1280))), Some(4_000_000));
+        assert_eq!(scaled_bitrate(&SourceSpec::default(), None), None);
+    }
+
+    #[test]
+    fn source_quality_mirrors_the_source_audio() {
+        let src = SourceSpec {
+            audio_bitrate: Some(256_000),
+            audio_sample_rate: Some(44_100),
+            audio_channels: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            audio_args(Quality::Source, &src),
+            ["-b:a", "256000", "-ar", "44100", "-ac", "1"]
+        );
+        assert_eq!(audio_args(Quality::Small, &src), ["-b:a", "96k"]);
     }
 
     #[test]
