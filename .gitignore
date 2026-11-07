@@ -33,3 +33,4 @@ src-tauri/WixTools/
 
 # Local scratch: screenshots, test exports, etc.
 logs/
+src-tauri/vcrt/

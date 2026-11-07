@@ -112,6 +112,20 @@ jobs:
       # bundled; the app downloads it on demand. Linux passes --bundles
       # explicitly to skip rpm (no rpmbuild on the runner); Windows passes it
       # to build NSIS only.
+      # autocut.exe imports MSVCP140*.dll (C++ runtime, via onnxruntime) and
+      # PCs without the VC++ Redistributable refuse to start it. Copy the
+      # runner's runtime DLLs; tauri.windows.conf.json installs them next to
+      # the exe (Microsoft-supported app-local deployment).
+      - name: Stage VC++ runtime DLLs
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/vcrt
+          for f in msvcp140 msvcp140_1 msvcp140_2 vcruntime140 vcruntime140_1; do
+            cp "/c/Windows/System32/$f.dll" src-tauri/vcrt/
+          done
+          ls -l src-tauri/vcrt
+
       - name: Tauri build
         env:
           # ggml defaults to -march=native, which bakes the CI runner's AVX-512

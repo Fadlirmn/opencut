@@ -38,6 +38,19 @@ jobs:
       - name: Install JS dependencies
         run: pnpm install --no-frozen-lockfile
 
+      # autocut.exe imports MSVCP140*.dll (C++ runtime, via onnxruntime) and
+      # PCs without the VC++ Redistributable refuse to start it. Copy the
+      # runner's runtime DLLs; tauri.windows.conf.json installs them next to
+      # the exe (Microsoft-supported app-local deployment).
+      - name: Stage VC++ runtime DLLs
+        shell: bash
+        run: |
+          mkdir -p src-tauri/vcrt
+          for f in msvcp140 msvcp140_1 msvcp140_2 vcruntime140 vcruntime140_1; do
+            cp "/c/Windows/System32/$f.dll" src-tauri/vcrt/
+          done
+          ls -l src-tauri/vcrt
+
       - name: Tauri build
         env:
           # ggml defaults to -march=native, which bakes the CI runner's AVX-512
