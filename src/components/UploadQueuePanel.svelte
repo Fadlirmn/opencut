@@ -79,16 +79,36 @@
   <header class="page-head">
     <h1>Upload &amp; Antrian</h1>
     <p>
-      Tambahkan beberapa video sekaligus — diproses satu per satu (atau paralel,
-      lihat Settings). Hening dipotong otomatis dan subtitle dibakar kalau diaktifkan.
+      Tambahkan beberapa video sekaligus — langsung diproses begitu masuk, satu per
+      satu (atau paralel, lihat Settings). Hening dipotong otomatis dan subtitle
+      dibakar kalau diaktifkan.
     </p>
   </header>
 
   <div class="dropzone card" class:hovering>
     <div class="dz-title mono">Drop Video di Sini</div>
-    <div class="dz-sub">atau pilih beberapa file sekaligus dari komputer</div>
+    <div class="dz-sub">atau pilih beberapa file sekaligus dari komputer — proses mulai otomatis</div>
     <button class="btn btn-primary" type="button" onclick={browseFiles}>+ Tambah Video</button>
     <div class="formats mono">mp4 · mov · m4v · mkv · webm · avi</div>
+    {#if batch.settings}
+      <label class="dz-option">
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={batch.settings.burn_subtitles}
+            disabled={batch.savingSettings}
+            onchange={(e) => batch.setBurnSubtitles(e.currentTarget.checked)}
+          />
+          <span></span>
+        </span>
+        <span class="dz-option-text">
+          <span class="dz-option-title">Bakar subtitle Bahasa Indonesia</span>
+          <span class="dz-option-sub muted-2">
+            {batch.settings.burn_subtitles ? "aktif — transkrip whisper dibakar ke video hasil" : "nonaktif — hanya potong hening"}
+          </span>
+        </span>
+      </label>
+    {/if}
   </div>
 
   <section class="card queue-card" class:collapsed={!processOpen}>
@@ -148,6 +168,7 @@
         disabled={starting || processingJobs.length === 0}
         onclick={startQueue}
         type="button"
+        title="Semua video diproses otomatis saat ditambahkan; tombol ini untuk memulai ulang kalau antrian berhenti"
       >{starting ? "Memulai…" : "Proses Semua"}</button>
     </footer>
     {#if batch.modelNeeded}
@@ -291,6 +312,72 @@
     color: var(--muted-2);
     letter-spacing: 0.04em;
     margin-top: 2px;
+  }
+  .dz-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    cursor: pointer;
+    text-align: left;
+  }
+  .dz-option-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .dz-option-title {
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .dz-option-sub {
+    font-size: 11px;
+  }
+
+  .switch {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  .switch input {
+    position: absolute;
+    opacity: 0;
+    width: 38px;
+    height: 22px;
+    margin: 0;
+    cursor: pointer;
+  }
+  .switch > span {
+    width: 38px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--input);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: background 140ms, border-color 140ms;
+  }
+  .switch > span::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--muted-2);
+    transition: transform 140ms, background 140ms;
+  }
+  .switch input:checked + span {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .switch input:checked + span::after {
+    transform: translateX(16px);
+    background: var(--primary-fg);
   }
 
   .queue-card {

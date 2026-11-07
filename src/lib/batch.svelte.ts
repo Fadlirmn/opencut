@@ -68,12 +68,24 @@ class BatchStore {
     });
   }
 
+  /// Add videos and start processing them right away — no separate
+  /// "Proses Semua" click needed. `start()` only tops up the worker pool,
+  /// so calling it per drop is safe while earlier jobs are still running.
   async addFiles(paths: string[]) {
     const real = paths.filter((p) => p.trim().length > 0);
     if (real.length === 0) return;
     // queue_add also emits queue-updated, so this.jobs updates via the
     // listener; the direct return value isn't needed here.
     await queueAdd(real);
+    await this.start();
+  }
+
+  /// Flip subtitle burning from the upload page and persist it at once,
+  /// so it takes effect for the next drop without a trip to Settings.
+  async setBurnSubtitles(on: boolean) {
+    if (!this.settings) return;
+    await this.saveSettings({ ...this.settings, burn_subtitles: on });
+    if (!on) this.modelNeeded = false;
   }
 
   /// Start the queue. When subtitles are on and the whisper model hasn't
