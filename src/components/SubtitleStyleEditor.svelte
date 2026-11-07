@@ -6,6 +6,7 @@
   import { batch } from "../lib/batch.svelte";
   import {
     DEFAULT_SUBTITLE_STYLE,
+    chunkCaption,
     rgba,
     subtitleMetrics,
     wrapCaption,
@@ -77,9 +78,36 @@
   let metrics = $derived(subtitleMetrics(frame.width, frame.height, style));
 
   let sample = $state("Ini contoh subtitle yang bakal muncul di video kamu");
-  let lines = $derived(
-    wrapCaption(style.uppercase ? sample.toUpperCase() : sample, metrics.maxChars),
+  // Play the sample the way the export times it: each chunk stays up for its
+  // share of a sentence spoken at ~2.5 words per second.
+  let chunks = $derived(
+    chunkCaption(style.uppercase ? sample.toUpperCase() : sample, style.words_per_caption),
   );
+  let chunkIndex = $state(0);
+  $effect(() => {
+    const list = chunks;
+    chunkIndex = 0;
+    if (list.length <= 1) return;
+    const sentenceMs = Math.max(1200, sample.split(/\s+/).filter(Boolean).length * 400);
+    let timer: ReturnType<typeof setTimeout>;
+    const step = (i: number) => {
+      chunkIndex = i;
+      const next = (i + 1) % list.length;
+      // Hold the last chunk a little longer before looping.
+      const hold = list[i].share * sentenceMs + (next === 0 ? 600 : 0);
+      timer = setTimeout(() => step(next), hold);
+    };
+    step(0);
+    return () => clearTimeout(timer);
+  });
+  let lines = $derived(wrapCaption(chunks[chunkIndex]?.text ?? "", metrics.maxChars));
+
+  const wordOptions = [
+    { value: 1, label: "1 kata" },
+    { value: 2, label: "2 kata" },
+    { value: 3, label: "3 kata" },
+    { value: 0, label: "1 kalimat" },
+  ];
 
   let boxPad = $derived(
     style.background ? Math.max(metrics.outline, metrics.fontSize * 0.15) : 0,
@@ -113,7 +141,21 @@
       </div>
     </div>
 
-    <Slider bind:value={style.size_pct} min={3} max={15} step={0.5} label="ukuran" format={(v) => `${v.toFixed(1)}%`} />
+    <div class="opt">
+      <div class="opt-label">Kata per tampilan</div>
+      <div class="seg seg-full">
+        {#each wordOptions as w (w.value)}
+          <button
+            class="seg-btn"
+            class:active={style.words_per_caption === w.value}
+            type="button"
+            onclick={() => (style.words_per_caption = w.value)}
+          >{w.label}</button>
+        {/each}
+      </div>
+    </div>
+
+    <Slider bind:value={style.size_pct} min={3} max={25} step={0.5} label="ukuran" format={(v) => `${v.toFixed(1)}%`} />
     <Slider bind:value={style.position_pct} min={0} max={60} step={1} label="jarak dari bawah" format={(v) => `${v.toFixed(0)}%`} />
     {#if !style.background}
       <Slider bind:value={style.outline} min={0} max={15} step={0.5} label="tebal garis tepi" format={(v) => v.toFixed(1)} />
@@ -340,6 +382,11 @@
     font: inherit;
     font-size: 11px;
     font-family: var(--font-mono);
+  }
+  .seg-full {
+    display: grid;
+    grid-auto-columns: 1fr;
+    margin-right: 0;
   }
   .seg-btn + .seg-btn {
     border-left: 1px solid var(--border);

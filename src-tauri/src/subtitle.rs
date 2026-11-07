@@ -40,13 +40,16 @@ pub struct SubtitleStyle {
     /// Characters per line before wrapping; 0 picks it from the frame width
     /// and font size so the line never runs past the side margins.
     pub max_chars_per_line: usize,
+    /// Words shown at once (TikTok-style word-by-word captions). 0 shows each
+    /// transcript segment whole, as before.
+    pub words_per_caption: usize,
 }
 
 impl Default for SubtitleStyle {
     fn default() -> Self {
         Self {
             font_name: "Arial".to_string(),
-            size_pct: 7.0,
+            size_pct: 11.0,
             position_pct: 25.0,
             text_color: "#FFFFFF".to_string(),
             outline_color: "#000000".to_string(),
@@ -56,6 +59,7 @@ impl Default for SubtitleStyle {
             background: false,
             background_opacity: 60,
             max_chars_per_line: 0,
+            words_per_caption: 1,
         }
     }
 }
@@ -91,9 +95,9 @@ fn metrics(video: VideoSize, style: &SubtitleStyle) -> Metrics {
     let height = video.height.max(2) as f64;
     let short = width.min(height);
     let size_pct = if style.size_pct.is_finite() {
-        style.size_pct.clamp(2.0, 20.0)
+        style.size_pct.clamp(2.0, 30.0)
     } else {
-        7.0
+        11.0
     };
     let font_size = ((short * size_pct / 100.0).round() as u32).max(8);
     let outline = (short * style.outline.clamp(0.0, 30.0) / 1000.0 * 10.0).round() / 10.0;
@@ -184,7 +188,7 @@ pub fn render_ass(segments: &[TimedText], video: VideoSize, style: &SubtitleStyl
     out.push_str(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
     );
-    for segment in segments {
+    for segment in &chunk_segments(segments, style.words_per_caption) {
         if segment.end <= segment.start || segment.text.trim().is_empty() {
             continue;
         }
@@ -201,6 +205,39 @@ pub fn render_ass(segments: &[TimedText], video: VideoSize, style: &SubtitleStyl
             ass_time(segment.end),
             text
         ));
+    }
+    out
+}
+
+/// Split each segment into captions of `words` words, sharing its time out
+/// in proportion to each group's length (characters plus one per word, so a
+/// short word still gets a readable moment). Whisper only times whole
+/// segments, and the LLM rewrite can change the words anyway, so this is the
+/// timing both paths can rely on. `0` leaves segments whole.
+fn chunk_segments(segments: &[TimedText], words: usize) -> Vec<TimedText> {
+    if words == 0 {
+        return segments.to_vec();
+    }
+    let mut out = Vec::new();
+    for segment in segments {
+        let all: Vec<&str> = segment.text.split_whitespace().collect();
+        if segment.end <= segment.start || all.is_empty() {
+            continue;
+        }
+        let groups: Vec<&[&str]> = all.chunks(words).collect();
+        let weight = |g: &[&str]| g.iter().map(|w| w.chars().count() + 1).sum::<usize>() as f64;
+        let total: f64 = groups.iter().map(|g| weight(g)).sum();
+        let span = segment.end - segment.start;
+        let mut cursor = segment.start;
+        for (i, group) in groups.iter().enumerate() {
+            let end = if i + 1 == groups.len() {
+                segment.end
+            } else {
+                cursor + span * weight(group) / total
+            };
+            out.push(TimedText::new(cursor, end, group.join(" ")));
+            cursor = end;
+        }
     }
     out
 }
@@ -375,7 +412,10 @@ mod tests {
                 width: 1920,
                 height: 1080,
             },
-            &SubtitleStyle::default(),
+            &SubtitleStyle {
+                words_per_caption: 0,
+                ..Default::default()
+            },
         );
         assert!(ass.contains("PlayResX: 1920"), "{ass}");
         assert!(ass.contains("PlayResY: 1080"), "{ass}");
@@ -393,7 +433,10 @@ mod tests {
                 width: 640,
                 height: 360,
             },
-            &SubtitleStyle::default(),
+            &SubtitleStyle {
+                words_per_caption: 0,
+                ..Default::default()
+            },
         );
         assert!(ass.contains(r"a \{b\} c\\d"), "{ass}");
     }
@@ -457,10 +500,10 @@ mod tests {
             },
             &SubtitleStyle::default(),
         );
-        // 7% of 1080 — same glyph size in both orientations, and larger than
-        // the old height-based size capped at 64.
-        assert_eq!(style_line(&portrait)[2], "76");
-        assert_eq!(style_line(&landscape)[2], "76");
+        // 11% of 1080 — same glyph size in both orientations, and far larger
+        // than the old height-based size capped at 64.
+        assert_eq!(style_line(&portrait)[2], "119");
+        assert_eq!(style_line(&landscape)[2], "119");
     }
 
     #[test]
@@ -511,6 +554,7 @@ mod tests {
     fn uppercase_and_auto_wrap_apply_to_dialogue() {
         let style = SubtitleStyle {
             uppercase: true,
+            words_per_caption: 0,
             ..Default::default()
         };
         let ass = render_ass(
@@ -530,6 +574,44 @@ mod tests {
         // Exactly ASS's line break, not an escaped backslash before it.
         assert!(line.contains("\\N"), "{line}");
         assert!(!line.contains("\\\\N"), "{line}");
+    }
+
+    #[test]
+    fn one_word_captions_split_the_segment_time() {
+        let chunks = chunk_segments(&[seg(10.0, 12.0, "aku makan nasi")], 1);
+        let words: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(words, ["aku", "makan", "nasi"]);
+        // Contiguous, starting and ending exactly on the segment.
+        assert_eq!(chunks[0].start, 10.0);
+        assert_eq!(chunks[2].end, 12.0);
+        assert_eq!(chunks[0].end, chunks[1].start);
+        assert_eq!(chunks[1].end, chunks[2].start);
+        // Longer word gets more time.
+        assert!(chunks[1].duration() > chunks[0].duration());
+    }
+
+    #[test]
+    fn grouped_and_whole_segment_modes() {
+        let segs = [seg(0.0, 3.0, "satu dua tiga empat lima")];
+        let two: Vec<String> = chunk_segments(&segs, 2)
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+        assert_eq!(two, ["satu dua", "tiga empat", "lima"]);
+        assert_eq!(chunk_segments(&segs, 0).len(), 1);
+    }
+
+    #[test]
+    fn default_style_renders_one_dialogue_per_word() {
+        let ass = render_ass(
+            &[seg(0.0, 2.0, "halo semua apa kabar")],
+            VideoSize {
+                width: 1080,
+                height: 1920,
+            },
+            &SubtitleStyle::default(),
+        );
+        assert_eq!(ass.matches("Dialogue:").count(), 4, "{ass}");
     }
 
     #[test]

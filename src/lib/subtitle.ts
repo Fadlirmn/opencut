@@ -18,11 +18,13 @@ export type SubtitleStyle = {
   background_opacity: number;
   /// 0 = automatic from frame width and font size.
   max_chars_per_line: number;
+  /// Words on screen at once; 0 = whole transcript segment.
+  words_per_caption: number;
 };
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   font_name: "Arial",
-  size_pct: 7,
+  size_pct: 11,
   position_pct: 25,
   text_color: "#FFFFFF",
   outline_color: "#000000",
@@ -32,6 +34,7 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   background: false,
   background_opacity: 60,
   max_chars_per_line: 0,
+  words_per_caption: 1,
 };
 
 export type SubtitleMetrics = {
@@ -48,7 +51,7 @@ export function subtitleMetrics(width: number, height: number, style: SubtitleSt
   const w = Math.max(2, width);
   const h = Math.max(2, height);
   const short = Math.min(w, h);
-  const sizePct = Number.isFinite(style.size_pct) ? clamp(style.size_pct, 2, 20) : 7;
+  const sizePct = Number.isFinite(style.size_pct) ? clamp(style.size_pct, 2, 30) : 11;
   const fontSize = Math.max(8, Math.round((short * sizePct) / 100));
   const outline = Math.round(((short * clamp(style.outline, 0, 30)) / 1000) * 10) / 10;
   const positionPct = Number.isFinite(style.position_pct) ? clamp(style.position_pct, 0, 90) : 25;
@@ -99,6 +102,20 @@ export function wrapCaption(text: string, maxChars: number): string[] {
   });
   splitAt = clamp(splitAt, 1, words.length - 1);
   return [words.slice(0, splitAt).join(" "), words.slice(splitAt).join(" ")];
+}
+
+/// Mirror of `chunk_segments`: the caption texts one segment becomes, each
+/// with its share of the segment's time (0–1), weighted by characters + 1
+/// per word.
+export function chunkCaption(text: string, words: number): { text: string; share: number }[] {
+  const all = text.split(/\s+/).filter(Boolean);
+  if (all.length === 0) return [];
+  if (words <= 0) return [{ text: all.join(" "), share: 1 }];
+  const groups: string[][] = [];
+  for (let i = 0; i < all.length; i += words) groups.push(all.slice(i, i + words));
+  const weight = (g: string[]) => g.reduce((a, w) => a + [...w].length + 1, 0);
+  const total = groups.reduce((a, g) => a + weight(g), 0);
+  return groups.map((g) => ({ text: g.join(" "), share: weight(g) / total }));
 }
 
 /// `#RRGGBB` + opacity (0–100) → CSS rgba().
