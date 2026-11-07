@@ -1,0 +1,39 @@
+name: Attach Windows build to release
+
+# Replaces a release's Windows installer with the one from a finished
+# "Build Windows" run, entirely on GitHub's side. Avoids round-tripping the
+# ~90MB installer through a slow local connection.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build Windows run ID whose installer to attach"
+        required: true
+      tag:
+        description: "Release tag to update (e.g. v0.0.11)"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: autocut-windows-x86_64
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifact
+
+      - name: Upload installer to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -lR artifact
+          exe=$(find artifact -path '*nsis*' -name '*-setup.exe' | head -n1)
+          test -n "$exe"
+          gh release upload "${{ inputs.tag }}" "$exe" --clobber --repo "$GITHUB_REPOSITORY"
