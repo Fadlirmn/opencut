@@ -24,7 +24,7 @@ use crate::oauth;
 use crate::probe::{probe, MediaInfo};
 use crate::queue::{Job, JobQueue};
 use crate::settings::{self, AppSettings};
-use crate::subtitle::{render_ass, render_srt, SubtitleStyle, VideoSize};
+use crate::subtitle::{render_ass, render_srt, VideoSize};
 use crate::sync::lock;
 use crate::timecode::parse_smpte;
 use crate::timeline::{map_to_output, SpeechTrack};
@@ -443,6 +443,7 @@ pub async fn generate_subtitles(
     let cancel = install_cancel_slot(&state.subtitle_cancel);
     let cancel_for_worker = cancel.clone();
     let cache = state.analysis_cache.clone();
+    let style = lock(&state.settings).subtitle_style.clone();
 
     let joined = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let samples = cache.samples(&ffmpeg, &source, cancel_for_worker.clone())?;
@@ -452,7 +453,6 @@ pub async fn generate_subtitles(
                 .map_err(fmt_err)?,
         );
         let output_segments = map_to_output(&cutlist, &segments);
-        let style = SubtitleStyle::default();
         Ok(match format {
             SubtitleFormat::Ass => render_ass(&output_segments, video, &style),
             SubtitleFormat::Srt => render_srt(&output_segments),

@@ -108,6 +108,11 @@
           </span>
         </span>
       </label>
+      {#if batch.settings.burn_subtitles}
+        <button class="btn btn-ghost btn-sm" type="button" onclick={() => (batch.page = "settings")}>
+          Atur tampilan subtitle →
+        </button>
+      {/if}
     {/if}
   </div>
 

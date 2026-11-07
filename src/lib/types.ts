@@ -1,3 +1,4 @@
+import type { SubtitleStyle } from "./subtitle";
 // Mirrors the Rust types in src-tauri/src. Keep in sync.
 
 export type MediaInfo = {
@@ -10,6 +11,8 @@ export type MediaInfo = {
   has_video: boolean;
   has_audio: boolean;
   start_timecode: string | null;
+  /// Clockwise display rotation (0/90/180/270); 90/270 swap width and height.
+  rotation?: number;
 };
 
 /// A piece of media that rides along with the reference clip and gets cut at
@@ -156,6 +159,7 @@ export type AppSettings = {
   resolution: ExportResolution;
   output_dir: string | null;
   llm: LlmSettings;
+  subtitle_style: SubtitleStyle;
   /// Backend migration marker; round-tripped untouched.
   settings_version?: number;
 };

@@ -5,6 +5,7 @@
   import { whisperModel } from "../lib/store.svelte";
   import type { ExportQuality, ExportResolution } from "../lib/types";
   import ModelDownloadPrompt from "./ModelDownloadPrompt.svelte";
+  import SubtitleStyleEditor from "./SubtitleStyleEditor.svelte";
 
   onMount(() => {
     void batch.refreshSettings();
@@ -285,6 +286,14 @@
           disimpan di keychain OS, bukan di file biasa.
         </div>
       </div>
+    </div>
+
+    <div class="card card-pad" id="subtitle-style">
+      <div class="card-head">
+        <h2>Tampilan Subtitle</h2>
+        <p class="sub">ukuran, posisi, dan warna teks yang dibakar ke video — lihat hasilnya langsung di preview</p>
+      </div>
+      <SubtitleStyleEditor bind:style={s.subtitle_style} />
     </div>
 
     <div class="save-row">

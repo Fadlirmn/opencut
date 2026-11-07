@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{ExportQuality, ExportResolution};
+use crate::subtitle::SubtitleStyle;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LlmSettings {
@@ -45,6 +46,9 @@ pub struct AppSettings {
     pub output_dir: Option<String>,
     #[serde(default)]
     pub llm: LlmSettings,
+    /// Look of burned-in subtitles, for both the queue and the editor export.
+    #[serde(default)]
+    pub subtitle_style: SubtitleStyle,
     /// Bumped when a stored default must be migrated on load. Absent from
     /// files written before v1; the frontend round-trips it unchanged, and a
     /// save that omits it is treated as already current.
@@ -81,6 +85,7 @@ impl Default for AppSettings {
             resolution: default_resolution(),
             output_dir: None,
             llm: LlmSettings::default(),
+            subtitle_style: SubtitleStyle::default(),
             settings_version: SETTINGS_VERSION,
         }
     }

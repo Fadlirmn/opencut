@@ -24,7 +24,7 @@ use crate::logstore::{self, LogEntry};
 use crate::probe::probe;
 use crate::progress::{fmt_clock, Progress, Stage, StageSpec};
 use crate::settings::AppSettings;
-use crate::subtitle::{render_ass, SubtitleStyle, VideoSize};
+use crate::subtitle::{render_ass, VideoSize};
 use crate::sync::lock;
 use crate::timeline::{map_to_output, SpeechTrack};
 use crate::transcribe::transcribe;
@@ -448,7 +448,7 @@ fn process_one(
             }
         }
 
-        let style = SubtitleStyle::default();
+        let style = settings.subtitle_style.clone();
         // Display orientation: ffmpeg auto-rotates before the ass filter runs.
         let (width, height) = info.display_size();
         let video = VideoSize {
