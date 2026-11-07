@@ -23,14 +23,13 @@ use crate::llm::rewrite_transcript;
 use crate::logstore::{self, LogEntry};
 use crate::probe::probe;
 use crate::progress::{fmt_clock, Progress, Stage, StageSpec};
+use crate::refine::{refine_segments, RefineParams};
 use crate::settings::AppSettings;
 use crate::subtitle::{render_ass, VideoSize};
 use crate::sync::lock;
 use crate::timeline::{map_to_output, SpeechTrack};
 use crate::transcribe::transcribe;
 use crate::vad::{score_chunks_with_progress, segments_from_scores, VadParams};
-
-const DEFAULT_PAD_SECONDS: f64 = 0.3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -396,7 +395,18 @@ fn process_one(
     })
     .map_err(|e| anyhow!("{e:#}"))?;
     let segments = segments_from_scores(&scores, vad_params, 0.0);
-    let cutlist = CutList::from_speech_segments(&segments, info.duration, DEFAULT_PAD_SECONDS);
+    // VAD edges are 32ms-coarse and run late; tighten them on the PCM so
+    // pauses lose their dead air without clipping words (see refine.rs).
+    // The refined ranges already carry their lead/tail, hence no pad here.
+    let keeps = refine_segments(
+        &samples,
+        VAD_SAMPLE_RATE,
+        &segments,
+        0.0,
+        info.duration,
+        RefineParams::default(),
+    );
+    let cutlist = CutList::from_speech_segments(&keeps, info.duration, 0.0);
     cutlist.ensure_exportable().map_err(|e| anyhow!("{e:#}"))?;
     let kept = cutlist.total_kept_duration();
     progress.set_detail(

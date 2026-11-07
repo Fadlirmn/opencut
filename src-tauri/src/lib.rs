@@ -11,6 +11,7 @@ pub mod oauth;
 pub mod probe;
 pub mod progress;
 pub mod queue;
+pub mod refine;
 pub mod settings;
 pub mod subtitle;
 pub mod sync;
