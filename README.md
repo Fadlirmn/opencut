@@ -51,9 +51,12 @@ notarized yet, and that command is the whole difference between the two paths.
 
 **Windows, x86_64.** `autocut_X.Y.Z_x64-setup.exe` (NSIS installer) from
 [the latest release][latest]. Unsigned, so SmartScreen wants **More info**, then
-**Run anyway** on first launch.
+**Run anyway** on first launch. A CI "Build Windows" artifact also holds a
+`portable/` folder whose `autocut.exe` runs without installing: ffmpeg,
+ffprobe and the VC++ runtime sit next to it.
 
-**Linux.** Build from source for now.
+**Linux, x86_64.** `autocut_X.Y.Z_amd64.AppImage` or the `.deb` from
+[the latest release][latest].
 
 ## Use
 

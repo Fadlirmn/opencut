@@ -75,8 +75,11 @@ fn binary_path(tool: Tool, resource_dir: Option<&Path>) -> Result<PathBuf> {
     // production is the directory holding the running executable: on macOS
     // Tauri places sidecar binaries next to the main app binary in
     // Contents/MacOS, NOT in Contents/Resources, so app.path().resource_dir()
-    // alone misses them. We also fall back to the build-time dev path
-    // (manifest_dir/binaries) so cargo-run / cargo-test work without bundling.
+    // alone misses them. Debug builds also fall back to the build-time dev
+    // path (manifest_dir/binaries) so cargo-run / cargo-test work without
+    // bundling; release builds skip it because that path is the CI runner's
+    // checkout and only confuses the error message. Finally a tool on PATH
+    // is accepted, so a bare exe still works where ffmpeg is installed.
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -89,11 +92,13 @@ fn binary_path(tool: Tool, resource_dir: Option<&Path>) -> Result<PathBuf> {
         candidates.push(rd.join(format!("{leaf}{suffix}")));
         candidates.push(rd.join(format!("{leaf}-{triple}{suffix}")));
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(format!("{leaf}-{triple}{suffix}")),
-    );
+    if cfg!(debug_assertions) {
+        candidates.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(format!("{leaf}-{triple}{suffix}")),
+        );
+    }
 
     for c in &candidates {
         if c.exists() {
@@ -101,9 +106,19 @@ fn binary_path(tool: Tool, resource_dir: Option<&Path>) -> Result<PathBuf> {
         }
     }
 
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let c = dir.join(format!("{leaf}{suffix}"));
+            if c.is_file() {
+                return Ok(c);
+            }
+        }
+    }
+
     let attempted = candidates
         .iter()
         .map(|p| p.display().to_string())
+        .chain(std::iter::once("PATH".to_string()))
         .collect::<Vec<_>>()
         .join(", ");
     Err(anyhow!(
